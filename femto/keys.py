@@ -4,14 +4,24 @@ Keybindings and input mapping for Femto.
 
 import curses
 
+
 class Key:
     """Constants for keyboard inputs."""
-    # Commands
+
+    # File / mode commands
     CTRL_X = 24      # Exit
     CTRL_S = 19      # Save
-    CTRL_A = 1       # Home (nano-style)
-    CTRL_E = 5       # End (nano-style)
-    CTRL_G = 7       # Cancel prompt / context help
+    CTRL_G = 7       # Cancel prompt
+
+    # Navigation helpers (nano-style)
+    CTRL_A = 1       # Home
+    CTRL_E = 5       # End
+
+    # New in a04
+    CTRL_W = 23      # Search / Find
+    CTRL_T = 20      # Go To Line
+    CTRL_Z = 26      # Undo
+    CTRL_Y = 25      # Redo
 
     # Arrows
     ARROW_UP = curses.KEY_UP
@@ -45,6 +55,7 @@ class Key:
 
 def is_backspace(key):
     return key in Key.BACKSPACE
+
 
 def is_enter(key):
     return key in Key.ENTER

@@ -1,9 +1,5 @@
 """
 Terminal rendering engine for Femto using curses.
-Supports three visual states:
-    • Normal status bar
-    • Save-As text prompt
-    • Exit confirmation bar
 """
 
 import curses
@@ -20,13 +16,10 @@ class Renderer:
     def setup_colors(self):
         curses.start_color()
         curses.use_default_colors()
-        # 1 = status-bar background
         curses.init_pair(1, curses.COLOR_WHITE, curses.COLOR_BLUE)
-        # 2 = prompt / warning text
         curses.init_pair(2, curses.COLOR_YELLOW, curses.COLOR_BLACK)
 
     def get_dimensions(self):
-        """Return usable text-area rows and total columns."""
         height, width = self.stdscr.getmaxyx()
         return max(1, height - 2), max(1, width)
 
@@ -54,7 +47,6 @@ class Renderer:
     # ── Bottom bars ───────────────────────────────────────────
 
     def draw_status_bar(self, buffer, cursor, screen_rows, screen_cols, message=""):
-        """Normal-mode status bar + help bar."""
         status = f" {__app_name__} v{__version__}"
         status += f"  {buffer.filename or 'New Buffer'}"
         if buffer.modified:
@@ -66,13 +58,12 @@ class Renderer:
         self._draw_bar(screen_rows, status, screen_cols, curses.color_pair(1))
         self._draw_bar(
             screen_rows + 1,
-            "^X Exit  ^S Save  ^G Cancel",
+            "^X Exit  ^S Save  ^W Find  ^T Line  ^Z Undo  ^Y Redo",
             screen_cols,
             curses.color_pair(1),
         )
 
-    def draw_prompt(self, prompt, screen_rows, screen_cols):
-        """Save-As text input prompt."""
+    def draw_prompt(self, prompt, screen_rows, screen_cols, help_text=""):
         self._draw_bar(
             screen_rows,
             prompt.get_display(screen_cols),
@@ -80,12 +71,8 @@ class Renderer:
             curses.color_pair(2),
         )
         self._draw_bar(
-            screen_rows + 1,
-            "Enter Confirm    ^G Cancel",
-            screen_cols,
-            curses.color_pair(1),
+            screen_rows + 1, help_text, screen_cols, curses.color_pair(1)
         )
-        # Place terminal cursor inside the prompt
         cx = min(prompt.get_cursor_x(), screen_cols - 1)
         try:
             self.stdscr.move(screen_rows, cx)
@@ -93,7 +80,6 @@ class Renderer:
             pass
 
     def draw_exit_confirm(self, message, screen_rows, screen_cols):
-        """Exit confirmation bar."""
         display = f" {message}  (Y)es / (N)o / (C)ancel"
         self._draw_bar(screen_rows, display, screen_cols, curses.color_pair(2))
         self._draw_bar(
@@ -106,7 +92,6 @@ class Renderer:
     # ── Helpers ───────────────────────────────────────────────
 
     def _draw_bar(self, row, text, width, attr):
-        """Write a padded string on *row*, safely."""
         text = text.ljust(width)[:width]
         try:
             self.stdscr.addstr(row, 0, text, attr)
@@ -123,18 +108,28 @@ class Renderer:
 
     # ── Main render entry ─────────────────────────────────────
 
+    _PROMPT_HELP = {
+        "save_as": "Enter Save    ^G Cancel",
+        "search": "Enter Find Next    ^G Cancel",
+        "goto_line": "Enter Jump    ^G Cancel",
+    }
+
     def render(self, buffer, cursor, message="", prompt=None, mode="normal"):
         self.stdscr.erase()
         screen_rows, screen_cols = self.get_dimensions()
         self.draw_text(buffer, cursor, screen_rows, screen_cols)
 
-        if mode == "save_as" and prompt and prompt.active:
-            self.draw_prompt(prompt, screen_rows, screen_cols)
+        if prompt and prompt.active and mode in self._PROMPT_HELP:
+            self.draw_prompt(
+                prompt, screen_rows, screen_cols, self._PROMPT_HELP[mode]
+            )
         elif mode == "exit_confirm":
             self.draw_exit_confirm(message, screen_rows, screen_cols)
             self.draw_cursor(cursor)
         else:
-            self.draw_status_bar(buffer, cursor, screen_rows, screen_cols, message)
+            self.draw_status_bar(
+                buffer, cursor, screen_rows, screen_cols, message
+            )
             self.draw_cursor(cursor)
 
         self.stdscr.refresh()

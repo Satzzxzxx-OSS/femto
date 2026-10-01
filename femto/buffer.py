@@ -4,15 +4,16 @@ Text buffer management for Femto.
 
 import os
 
+
 class Buffer:
     """Handles the text content as a list of lines."""
-    
+
     def __init__(self):
         self.lines = [""]
         self.filename = None
         self.modified = False
 
-    # -------- File I/O ---------------------------
+    # ── File I/O ──────────────────────────────────────────────
 
     def load_file(self, filepath):
         """Load a file into the buffer."""
@@ -42,26 +43,23 @@ class Buffer:
         except Exception:
             return False
 
-    # ------ Editing -----------------------------
+    # ── Editing ───────────────────────────────────────────────
 
     def insert_char(self, x, y, char):
-        """Insert a character at (x, y)."""
         line = self.lines[y]
         self.lines[y] = line[:x] + char + line[x:]
         self.modified = True
 
     def insert_newline(self, x, y):
-        """Split the line at (x, y) into two lines."""
         line = self.lines[y]
         self.lines[y] = line[:x]
         self.lines.insert(y + 1, line[x:])
         self.modified = True
 
     def delete_char(self, x, y):
-        """Delete the character at (x, y)."""
         if x < len(self.lines[y]):
             line = self.lines[y]
-            self.lines[y] = line[:x] + line[x+1:]
+            self.lines[y] = line[:x] + line[x + 1:]
             self.modified = True
         elif x == len(self.lines[y]) and y < len(self.lines) - 1:
             self.lines[y] += self.lines[y + 1]
@@ -69,7 +67,6 @@ class Buffer:
             self.modified = True
 
     def backspace(self, x, y):
-        """Handle backspace at (x, y), returns new (x, y)."""
         if x > 0:
             self.delete_char(x - 1, y)
             return x - 1, y
@@ -81,10 +78,9 @@ class Buffer:
             return prev_len, y - 1
         return x, y
 
-    # ------ Tab / Indentation --------------------
+    # ── Tab / Indentation ─────────────────────────────────────
 
     def insert_tab(self, y, x):
-        """Insert 4 spaces at cursor: Returns new x."""
         spaces = "    "
         line = self.lines[y]
         self.lines[y] = line[:x] + spaces + line[x:]
@@ -92,11 +88,10 @@ class Buffer:
         return x + len(spaces)
 
     def remove_tab(self, y, x):
-        """Remove up to 4 leading spaces. Returns new x."""
         line = self.lines[y]
         spaces_to_remove = 0
         for i in range(min(4, len(line))):
-            if line[i] == '':
+            if line[i] == ' ':
                 spaces_to_remove += 1
             else:
                 break
@@ -106,42 +101,60 @@ class Buffer:
             return max(0, x - spaces_to_remove)
         return x
 
-    # --------- Word Navigation -------------------------
+    # ── Word Navigation ───────────────────────────────────────
 
     def get_next_word_pos(self, y, x):
-        """Return x position of the start of the next word."""
         line = self.lines[y]
-        # Skip current word characters
         while x < len(line) and line[x].isalnum():
             x += 1
-        # Skip non-word characters (spaces, punctuation)
         while x < len(line) and not line[x].isalnum():
             x += 1
         return x
 
     def get_prev_word_pos(self, y, x):
-        """Return x position of the start of the previous word."""
         line = self.lines[y]
         if x == 0:
             return 0
         x -= 1
-        # Skip non-word characters
         while x >= 0 and not line[x].isalnum():
             x -= 1
-        # Skip word characters
         while x >= 0 and line[x].isalnum():
             x -= 1
         return x + 1
 
-    # -------- Helpers ------------------------------
+    # ── Search ────────────────────────────────────────────────
+
+    def find_text(self, term, start_x, start_y):
+        """
+        Case-sensitive forward search for *term*.
+
+        Starts at (start_x, start_y) and wraps around the entire buffer.
+        Returns (x, y) of the match, or None.
+        """
+        if not term:
+            return None
+
+        num_lines = len(self.lines)
+        if num_lines == 0:
+            return None
+
+        for i in range(num_lines):
+            y = (start_y + i) % num_lines
+            line = self.lines[y]
+            search_from = start_x if i == 0 else 0
+            pos = line.find(term, search_from)
+            if pos != -1:
+                return pos, y
+
+        return None
+
+    # ── Helpers ───────────────────────────────────────────────
 
     def get_line_length(self, y):
-        """Returns the length of line y."""
         if 0 <= y < len(self.lines):
             return len(self.lines[y])
         return 0
 
     @property
     def max_y(self):
-        """Maximum Y index."""
         return max(0, len(self.lines) - 1)

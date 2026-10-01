@@ -11,6 +11,7 @@ class Key:
     CTRL_S = 19      # Save
     CTRL_A = 1       # Home (nano-style)
     CTRL_E = 5       # End (nano-style)
+    CTRL_G = 7       # Cancel prompt / context help
 
     # Arrows
     ARROW_UP = curses.KEY_UP
@@ -18,7 +19,7 @@ class Key:
     ARROW_LEFT = curses.KEY_LEFT
     ARROW_RIGHT = curses.KEY_RIGHT
 
-    # Word navigation (Ctrl+Left / Ctrl+Right)
+    # Word navigation
     CTRL_LEFT = curses.KEY_SLEFT
     CTRL_RIGHT = curses.KEY_SRIGHT
 
@@ -39,6 +40,7 @@ class Key:
 
     # Terminal
     RESIZE = curses.KEY_RESIZE
+    ESCAPE = 27
 
 
 def is_backspace(key):

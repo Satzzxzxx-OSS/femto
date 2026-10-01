@@ -1,50 +1,140 @@
 """
 Main Application Controller for Femto.
+Implements a simple mode state-machine:
+    NORMAL → SAVE_AS → NORMAL
+    NORMAL → EXIT_CONFIRM → (SAVE_AS | exit)
 """
 
 import curses
 from femto.buffer import Buffer
 from femto.cursor import Cursor
 from femto.renderer import Renderer
+from femto.prompt import Prompt
 from femto.keys import Key, is_backspace, is_enter
 
 
+class Mode:
+    """Application input modes."""
+    NORMAL = "normal"
+    SAVE_AS = "save_as"
+    EXIT_CONFIRM = "exit_confirm"
+
+
 class Application:
-    """Ties together the buffer, cursor, renderer, and input loop."""
+    """Ties together buffer, cursor, renderer, prompt, and the input loop."""
 
     def __init__(self, filename=None):
         self.buffer = Buffer()
         self.buffer.load_file(filename)
         self.cursor = Cursor()
+        self.renderer = None          # assigned inside main_loop
         self.message = ""
         self.running = True
+        self.mode = Mode.NORMAL
+        self.prompt = Prompt()
+        self.pending_exit = False     # exit after Save-As completes
+
+    # ── Input routing ─────────────────────────────────────────
 
     def handle_input(self, key, screen_rows, screen_cols):
-        """Process a single keystroke."""
+        """Route a keypress to the handler for the current mode."""
+        if self.mode == Mode.SAVE_AS:
+            self._handle_save_as(key)
+        elif self.mode == Mode.EXIT_CONFIRM:
+            self._handle_exit_confirm(key)
+        else:
+            self._handle_normal(key, screen_rows, screen_cols)
+
+    # ── SAVE AS mode ──────────────────────────────────────────
+
+    def _handle_save_as(self, key):
+        result = self.prompt.handle_key(key)
+
+        if result == 'confirmed':
+            filename = self.prompt.text.strip()
+            if not filename:
+                # Empty name → stay in prompt so user can type
+                return
+            self.buffer.filename = filename
+            if self.buffer.save():
+                self.message = f"Saved → {filename}"
+            else:
+                self.message = "Error: could not save file."
+            self._exit_prompt_mode()
+            if self.pending_exit:
+                self.running = False
+
+        elif result == 'cancelled':
+            self._exit_prompt_mode()
+            self.message = "Save cancelled."
+
+    def _exit_prompt_mode(self):
+        self.prompt.deactivate()
+        self.mode = Mode.NORMAL
+        self.pending_exit = False
+
+    # ── EXIT CONFIRM mode ─────────────────────────────────────
+
+    def _handle_exit_confirm(self, key):
+        # Yes → save then exit
+        if key in (ord('y'), ord('Y')):
+            if self.buffer.filename:
+                if self.buffer.save():
+                    self.running = False
+                else:
+                    self.message = "Error: could not save file."
+                    self.mode = Mode.NORMAL
+            else:
+                # No filename yet → ask for one, then exit
+                self.mode = Mode.SAVE_AS
+                self.prompt.start("Save As: ")
+                self.pending_exit = True
+
+        # No → discard and exit
+        elif key in (ord('n'), ord('N')):
+            self.running = False
+
+        # Cancel → back to editing
+        elif key in (ord('c'), ord('C'), Key.CTRL_G, Key.ESCAPE):
+            self.mode = Mode.NORMAL
+            self.message = "Exit cancelled."
+
+    # ── NORMAL mode ───────────────────────────────────────────
+
+    def _handle_normal(self, key, screen_rows, screen_cols):
         self.message = ""
         buf = self.buffer
         cur = self.cursor
         max_x = buf.get_line_length
         max_y = buf.max_y
 
-        # ── Commands ──────────────────────────────────────────
+        # ── File commands ─────────────────────────────────────
         if key == Key.CTRL_X:
-            self.running = False
-            return
-        elif key == Key.CTRL_S:
-            if buf.save():
-                self.message = "File saved successfully."
+            if buf.modified:
+                self.mode = Mode.EXIT_CONFIRM
+                self.message = "Save modified buffer?"
             else:
-                self.message = "Error saving file! (No filename?)"
+                self.running = False
             return
 
-        # ── Word Navigation (Ctrl+Left / Ctrl+Right) ──────────
-        elif key == Key.CTRL_LEFT:
+        if key == Key.CTRL_S:
+            if buf.filename:
+                if buf.save():
+                    self.message = "File saved."
+                else:
+                    self.message = "Error: could not save file."
+            else:
+                self.mode = Mode.SAVE_AS
+                self.prompt.start("Save As: ")
+            return
+
+        # ── Word navigation ───────────────────────────────────
+        if key == Key.CTRL_LEFT:
             cur.x = buf.get_prev_word_pos(cur.y, cur.x)
         elif key == Key.CTRL_RIGHT:
             cur.x = buf.get_next_word_pos(cur.y, cur.x)
 
-        # ── Page Navigation ───────────────────────────────────
+        # ── Page navigation ───────────────────────────────────
         elif key == Key.PAGE_UP:
             cur.page_move(-screen_rows, max_x, max_y)
         elif key == Key.PAGE_DOWN:
@@ -56,7 +146,7 @@ class Application:
         elif key == Key.END or key == Key.CTRL_E:
             cur.end(max_x(cur.y))
 
-        # ── Arrow Navigation ──────────────────────────────────
+        # ── Arrow navigation ──────────────────────────────────
         elif key == Key.ARROW_UP:
             cur.move(0, -1, max_x, max_y)
         elif key == Key.ARROW_DOWN:
@@ -94,14 +184,23 @@ class Application:
             buf.insert_char(cur.x, cur.y, char)
             cur.x += 1
 
+    # ── Main loop ─────────────────────────────────────────────
+
     def main_loop(self, stdscr):
-        """The core event loop running inside curses.wrapper."""
-        renderer = Renderer(stdscr)
+        """Core event loop inside curses.wrapper."""
+        self.renderer = Renderer(stdscr)
 
         while self.running:
-            screen_rows, screen_cols = renderer.get_dimensions()
+            screen_rows, screen_cols = self.renderer.get_dimensions()
             self.cursor.update_scroll(screen_rows, screen_cols)
-            renderer.render(self.buffer, self.cursor, self.message)
+
+            self.renderer.render(
+                self.buffer,
+                self.cursor,
+                message=self.message,
+                prompt=self.prompt,
+                mode=self.mode,
+            )
 
             try:
                 key = stdscr.getch()
@@ -115,7 +214,7 @@ class Application:
             self.handle_input(key, screen_rows, screen_cols)
 
     def run(self):
-        """Entry point to start the curses application."""
+        """Entry point – wraps the main loop with curses initialisation."""
         try:
             curses.wrapper(self.main_loop)
         except Exception as e:

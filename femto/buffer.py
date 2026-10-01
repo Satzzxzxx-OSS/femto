@@ -12,6 +12,8 @@ class Buffer:
         self.filename = None
         self.modified = False
 
+    # -------- File I/O ---------------------------
+
     def load_file(self, filepath):
         """Load a file into the buffer."""
         self.filename = filepath
@@ -19,7 +21,6 @@ class Buffer:
             try:
                 with open(filepath, 'r', encoding='utf-8') as f:
                     content = f.read()
-                    # Replace tabs with spaces for consistent rendering
                     self.lines = content.replace('\t', '    ').splitlines()
                     if not self.lines:
                         self.lines = [""]
@@ -33,7 +34,6 @@ class Buffer:
         """Save the buffer to the current filename."""
         if not self.filename:
             return False
-        
         try:
             with open(self.filename, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(self.lines))
@@ -41,6 +41,8 @@ class Buffer:
             return True
         except Exception:
             return False
+
+    # ------ Editing -----------------------------
 
     def insert_char(self, x, y, char):
         """Insert a character at (x, y)."""
@@ -62,7 +64,6 @@ class Buffer:
             self.lines[y] = line[:x] + line[x+1:]
             self.modified = True
         elif x == len(self.lines[y]) and y < len(self.lines) - 1:
-            # Merge with next line
             self.lines[y] += self.lines[y + 1]
             del self.lines[y + 1]
             self.modified = True
@@ -73,13 +74,66 @@ class Buffer:
             self.delete_char(x - 1, y)
             return x - 1, y
         elif y > 0:
-            # Merge current line with previous line
             prev_len = len(self.lines[y - 1])
             self.lines[y - 1] += self.lines[y]
             del self.lines[y]
             self.modified = True
             return prev_len, y - 1
         return x, y
+
+    # ------ Tab / Indentation --------------------
+
+    def insert_tab(self, y, x):
+        """Insert 4 spaces at cursor: Returns new x."""
+        spaces = "    "
+        line = self.lines[y]
+        self.lines[y] = line[:x] + spaces + line[x:]
+        self.modified = True
+        return x + len(spaces)
+
+    def remove_tab(self, y, x):
+        """Remove up to 4 leading spaces. Returns new x."""
+        line = self.lines[y]
+        spaces_to_remove = 0
+        for i in range(min(4, len(line))):
+            if line[i] == '':
+                spaces_to_remove += 1
+            else:
+                break
+        if spaces_to_remove > 0:
+            self.lines[y] = line[spaces_to_remove:]
+            self.modified = True
+            return max(0, x - spaces_to_remove)
+        return x
+
+    # --------- Word Navigation -------------------------
+
+    def get_next_word_pos(self, y, x):
+        """Return x position of the start of the next word."""
+        line = self.lines[y]
+        # Skip current word characters
+        while x < len(line) and line[x].isalnum():
+            x += 1
+        # Skip non-word characters (spaces, punctuation)
+        while x < len(line) and not line[x].isalnum():
+            x += 1
+        return x
+
+    def get_prev_word_pos(self, y, x):
+        """Return x position of the start of the previous word."""
+        line = self.lines[y]
+        if x == 0:
+            return 0
+        x -= 1
+        # Skip non-word characters
+        while x >= 0 and not line[x].isalnum():
+            x -= 1
+        # Skip word characters
+        while x >= 0 and line[x].isalnum():
+            x -= 1
+        return x + 1
+
+    # -------- Helpers ------------------------------
 
     def get_line_length(self, y):
         """Returns the length of line y."""

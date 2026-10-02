@@ -4,25 +4,22 @@ Text buffer management for Femto.
 
 import os
 
-
 class Buffer:
-    """Handles the text content as a list of lines."""
-
-    def __init__(self):
+    def __init__(self, config):
         self.lines = [""]
         self.filename = None
         self.modified = False
-
-    # ── File I/O ──────────────────────────────────────────────
+        self.config = config
 
     def load_file(self, filepath):
-        """Load a file into the buffer."""
         self.filename = filepath
         if filepath and os.path.exists(filepath):
             try:
                 with open(filepath, 'r', encoding='utf-8') as f:
                     content = f.read()
-                    self.lines = content.replace('\t', '    ').splitlines()
+                    # Replace tabs with spaces based on config
+                    spaces = " " * self.config.tab_size
+                    self.lines = content.replace('\t', spaces).splitlines()
                     if not self.lines:
                         self.lines = [""]
             except Exception as e:
@@ -32,7 +29,6 @@ class Buffer:
         self.modified = False
 
     def save(self):
-        """Save the buffer to the current filename."""
         if not self.filename:
             return False
         try:
@@ -42,8 +38,6 @@ class Buffer:
             return True
         except Exception:
             return False
-
-    # ── Editing ───────────────────────────────────────────────
 
     def insert_char(self, x, y, char):
         line = self.lines[y]
@@ -78,10 +72,8 @@ class Buffer:
             return prev_len, y - 1
         return x, y
 
-    # ── Tab / Indentation ─────────────────────────────────────
-
     def insert_tab(self, y, x):
-        spaces = "    "
+        spaces = " " * self.config.tab_size
         line = self.lines[y]
         self.lines[y] = line[:x] + spaces + line[x:]
         self.modified = True
@@ -90,7 +82,7 @@ class Buffer:
     def remove_tab(self, y, x):
         line = self.lines[y]
         spaces_to_remove = 0
-        for i in range(min(4, len(line))):
+        for i in range(min(self.config.tab_size, len(line))):
             if line[i] == ' ':
                 spaces_to_remove += 1
             else:
@@ -100,8 +92,6 @@ class Buffer:
             self.modified = True
             return max(0, x - spaces_to_remove)
         return x
-
-    # ── Word Navigation ───────────────────────────────────────
 
     def get_next_word_pos(self, y, x):
         line = self.lines[y]
@@ -122,22 +112,10 @@ class Buffer:
             x -= 1
         return x + 1
 
-    # ── Search ────────────────────────────────────────────────
-
     def find_text(self, term, start_x, start_y):
-        """
-        Case-sensitive forward search for *term*.
-
-        Starts at (start_x, start_y) and wraps around the entire buffer.
-        Returns (x, y) of the match, or None.
-        """
-        if not term:
-            return None
-
+        if not term: return None
         num_lines = len(self.lines)
-        if num_lines == 0:
-            return None
-
+        if num_lines == 0: return None
         for i in range(num_lines):
             y = (start_y + i) % num_lines
             line = self.lines[y]
@@ -145,10 +123,7 @@ class Buffer:
             pos = line.find(term, search_from)
             if pos != -1:
                 return pos, y
-
         return None
-
-    # ── Helpers ───────────────────────────────────────────────
 
     def get_line_length(self, y):
         if 0 <= y < len(self.lines):

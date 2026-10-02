@@ -50,17 +50,19 @@ class Renderer:
 
         visual_row = 0
         for y, line in enumerate(buffer.lines):
-            for i, chunk in enumerate(chunk_line(line, screen_cols)):
+            x0 = 0  # logical char offset of the current chunk start
+            for chunk in chunk_line(line, screen_cols):
                 if visual_row < cursor.scroll_y:
                     visual_row += 1
-                    continue
-                if visual_row >= cursor.scroll_y + screen_rows:
+                elif visual_row >= cursor.scroll_y + screen_rows:
                     return
-                draw_y = visual_row - cursor.scroll_y
-                self.stdscr.move(draw_y, 0)
-                self.stdscr.clrtoeol()
-                self._draw_chunk(draw_y, chunk, i * screen_cols, y, sel, match)
-                visual_row += 1
+                else:
+                    draw_y = visual_row - cursor.scroll_y
+                    self.stdscr.move(draw_y, 0)
+                    self.stdscr.clrtoeol()
+                    self._draw_chunk(draw_y, chunk, x0, y, sel, match)
+                    visual_row += 1
+                x0 += len(chunk)
 
         while visual_row - cursor.scroll_y < screen_rows:
             draw_y = visual_row - cursor.scroll_y

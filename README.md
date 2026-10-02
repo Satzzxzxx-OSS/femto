@@ -1,22 +1,65 @@
-# Femto v0.0.1a01
+# Femto v0.0.1
+     
+Femto is a tiny, nano-style terminal text editor written in **pure Python**.
+It ships with zero runtime dependencies on POSIX system (standard-library `curses` only) and automatically pulls `windows-curses` on Windows.
 
-Femto is a tiny, nano-style terminal text editor written in pure Python.
-It relies solely on the Python standard library (`curses`) to provide a lightweight text editing experience directly in your terminal.
+## Install
 
-## Features (v0.0.1a01)
-- Open, edit, and save text files
-- Nano-style bottom status bar and help prompt
-- Arrow key nabigation
-- Basic text insertion and deletion (Backspace/Delete)
-- Pure Python, no external dependencies
+```bash
+# From source
+pip install .
+
+# Or directly from the repository
+pip install git+https://github.com/codewithzaqar/femto
+
+# Developers: run without installing
+python -m femto myfile.txt
+```
+
+After installation the `femto` command is available globally.
 
 ## Usage
 ```bash
-python femto.py [filename]
+femto [file]        # open or create a file
+femto --tab=size 2 x.py # override tab width
+femto --no-wrap long.log # horizontal scrolling instead of soft wrap
+femto --version
 ```
 
-## Controls
-- `Ctrl+S`: Save
-- `Ctrl+X`: Exit
-- `Arrow Keys`: Move cursor
-- `Backspace / Delete`: Remove characters
+## Keybindings
+
+|Key|Action|Key|Action|
+|---|---|---|---|
+|`Ctrl+X`|Exit (asks to save)|`Ctrl+W`|Search / find next|
+|`Ctrl+S`|Save (Save-As if unnamed)|`Ctrl+T`|Go to line|
+|`Ctrl+Z`/`Ctrl+Y`|Undo / Redo|`Ctrl+G`/`Esc`|Cancel prompt|
+|`Arrows`|Move|`Ctrl+<-/->`|Word jump|
+|`Home/End`, `Ctrl+A/E`|Line start/end|`PgUp/PgDn`|Page scroll|
+|`Tab`/`Shift+Tab`|Indent / unindent|`Enter`|New line|
+
+## Configuration (`~/.femtorc` or `./.femtorc`)
+
+```ini
+# comment
+tab_size = 4
+smooth_scroll_margin = 3
+soft_wrap = true
+```
+
+## Running the tests
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+## Building a release
+
+```bash
+pip install build twine
+python -m build          # creates dist/femto_editor-0.0.1-*.whl
+python -m twine upload dist/* # publish to PyPI
+```
+
+## License
+
+MIT - see [LICENSE](LICENSE).

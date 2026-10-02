@@ -1,0 +1,60 @@
+"""
+Command-line entry point for Femto.
+
+Enables:
+    python -m femto [file]
+    femto [file]            (console script installed by pip)
+"""
+
+import argparse
+import sys
+
+from femto import __version__, __app_name__
+from femto.app import Application
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="femto",
+        description="Femto - a tiny nano-style terminal text editor.",
+    )
+    parser.add_argument(
+        "filename", nargs="?", default=None,
+        help="file to open (created on save if it does not exist)",
+    )
+    parser.add_argument(
+        "--version", action="version",
+        version=f"{__app_name__} {__version__}",
+    )
+    parser.add_argument(
+        "--tab-size", type=int, default=None, metavar="N",
+        help="spaces inserted by Tab (overrides .femtorc)",
+    )
+    parser.add_argument(
+        "--scroll-margin", type=int, default=None, metavar="N",
+        help="smooth-scroll margin in rows (overrides .femtorc)",
+    )
+    parser.add_argument(
+        "--no-wrap", action="store_true",
+        help="disable soft line wrapping (use horizontal scrolling)",
+    )
+    return parser
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+
+    app = Application(args.filename)
+    if args.tab_size is not None and args.tab_size >= 1:
+        app.config.tab_size = args.tab_size
+    if args.scroll_margin is not None and args.scroll_margin >= 0:
+        app.config.smooth_scroll_margin = args.scroll_margin
+    if args.no_wrap:
+        app.config.soft_wrap = False
+
+    app.run()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

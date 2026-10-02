@@ -31,9 +31,33 @@ class Cursor:
         self.y = max(0, min(y, max_y))
         self.x = max(0, min(x, max_x_func(self.y)))
 
-    def update_scroll(self, visual_y, screen_rows, margin):
-        """Smooth scrolling based on visual row position."""
+    def update_scroll(self, visual_y, visual_x, screen_rows, screen_cols,
+                      margin, soft_wrap=True):
+        """Keep the cursor inside the viewport with smooth margins."""
+        # ── Vertical ──
         if visual_y < self.scroll_y + margin:
             self.scroll_y = max(0, visual_y - margin)
         elif visual_y >= self.scroll_y + screen_rows - margin:
             self.scroll_y = max(0, visual_y - screen_rows + margin + 1)
+
+        # Safety clamp for very small terminals
+        if self.scroll_y > visual_y:
+            self.scroll_y = visual_y
+        if self.scroll_y + screen_rows <= visual_y:
+            self.scroll_y = visual_y - screen_rows + 1
+
+        # ── Horizontal ──
+        if soft_wrap:
+            self.scroll_x = 0
+        else:
+            h = 2
+            if visual_x < self.scroll_x + h:
+                self.scroll_x = max(0, visual_x - h)
+            elif visual_x >= self.scroll_x + screen_cols - h:
+                self.scroll_x = max(0, visual_x - screen_cols + h + 1)
+
+            # Safety clamp for very narrow terminals
+            if self.scroll_x > visual_x:
+                self.scroll_x = visual_x
+            if self.scroll_x + screen_cols <= visual_x:
+                self.scroll_x = visual_x - screen_cols + 1

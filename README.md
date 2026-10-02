@@ -36,6 +36,8 @@ femto --version
 |`Arrows`|Move|`Ctrl+<-/->`|Word jump|
 |`Home/End`, `Ctrl+A/E`|Line start/end|`PgUp/PgDn`|Page scroll|
 |`Tab`/`Shift+Tab`|Indent / unindent|`Enter`|New line|
+|`Alt+A`|Set / clear mark|`Ctrl+K`|Cut line or selection|
+|`Alt+6`|Copy line or selection|`Ctrl+U`|Paste clipboard|
 
 ## Configuration (`~/.femtorc` or `./.femtorc`)
 

@@ -12,7 +12,8 @@ from femto.layout import get_visual_position, get_logical_from_visual
 from femto.prompt import Prompt
 from femto.history import History
 from femto.config import Config
-from femto.keys import Key, is_backspace, is_enter
+from femto.clipboard import Clipboard, Selection
+from femto.keys import Key, alt, is_backspace, is_enter
 
 
 def _ignore_suspend():
@@ -46,12 +47,76 @@ class Application:
         self.mode = Mode.NORMAL
         self.prompt = Prompt()
         self.history = History()
+        self.clipboard = Clipboard()
+        self.selection = Selection()
         self.pending_exit = False
         self.last_search = ""
         self.last_found_pos = None
 
+    # ── history / selection helpers ───────────────────────────
+
     def _snapshot(self):
         self.history.push(self.buffer.lines, self.cursor.x, self.cursor.y)
+
+    def _pre_edit(self):
+        """Snapshot history, then collapse (delete) any active selection."""
+        self._snapshot()
+        if self.selection.active:
+            bounds = self.selection.bounds(self.buffer,
+                                           self.cursor.x, self.cursor.y)
+            if not self.selection.is_empty(bounds):
+                nx, ny = self.selection.delete_range(self.buffer, bounds)
+                self.cursor.x, self.cursor.y = nx, ny
+                self.selection.clear()
+
+    def _current_bounds(self):
+        return self.selection.bounds(self.buffer,
+                                     self.cursor.x, self.cursor.y)
+
+    # ── clipboard operations ──────────────────────────────────
+
+    def _cut(self):
+        self._snapshot()
+        bounds = self._current_bounds()
+        if self.selection.active and not self.selection.is_empty(bounds):
+            text = self.selection.extract(self.buffer, bounds)
+            nx, ny = self.selection.delete_range(self.buffer, bounds)
+            self.cursor.x, self.cursor.y = nx, ny
+            self.message = f"Cut {len(text)} chars."
+        else:
+            y = self.cursor.y
+            text = self.buffer.lines[y] + "\n"
+            if len(self.buffer.lines) > 1:
+                del self.buffer.lines[y]
+                self.cursor.x = 0
+                self.cursor.y = min(y, self.buffer.max_y)
+            else:
+                self.buffer.lines[0] = ""
+                self.cursor.x = 0
+            self.buffer.modified = True
+            self.message = "Cut line."
+        self.selection.clear()
+        self.clipboard.store(text)
+
+    def _copy(self):
+        bounds = self._current_bounds()
+        if self.selection.active and not self.selection.is_empty(bounds):
+            text = self.selection.extract(self.buffer, bounds)
+            self.message = f"Copied {len(text)} chars."
+        else:
+            text = self.buffer.lines[self.cursor.y] + "\n"
+            self.message = "Copied line."
+        self.clipboard.store(text)
+
+    def _paste(self):
+        if self.clipboard.empty:
+            self.message = "Clipboard is empty."
+            return
+        self._pre_edit()
+        nx, ny = self.clipboard.paste_into(self.buffer,
+                                           self.cursor.x, self.cursor.y)
+        self.cursor.x, self.cursor.y = nx, ny
+        self.message = f"Pasted {len(self.clipboard.text)} chars."
 
     # ── input routing ─────────────────────────────────────────
 
@@ -67,7 +132,7 @@ class Application:
         else:
             self._handle_normal(key, screen_rows, screen_cols)
 
-    # ── SAVE AS ───────────────────────────────────────────────
+    # ── prompt modes (unchanged behaviour) ────────────────────
 
     def _handle_save_as(self, key):
         result = self.prompt.handle_key(key)
@@ -77,7 +142,7 @@ class Application:
                 return
             self.buffer.filename = filename
             if self.buffer.save():
-                self.message = f"Saved: {filename}"     # ASCII-safe
+                self.message = f"Saved: {filename}"
             else:
                 self.message = "Error: could not save file."
             self._exit_prompt_mode()
@@ -86,8 +151,6 @@ class Application:
         elif result == 'cancelled':
             self._exit_prompt_mode()
             self.message = "Save cancelled."
-
-    # ── SEARCH ────────────────────────────────────────────────
 
     def _handle_search(self, key):
         result = self.prompt.handle_key(key)
@@ -116,8 +179,6 @@ class Application:
             self.message = f"Not found: {term}"
             self.last_found_pos = None
 
-    # ── GO TO LINE ────────────────────────────────────────────
-
     def _handle_goto_line(self, key):
         result = self.prompt.handle_key(key)
         if result == 'confirmed':
@@ -134,8 +195,6 @@ class Application:
             self._exit_prompt_mode()
         elif result == 'cancelled':
             self._exit_prompt_mode()
-
-    # ── EXIT CONFIRM ──────────────────────────────────────────
 
     def _handle_exit_confirm(self, key):
         if key in (ord('y'), ord('Y')):
@@ -164,6 +223,7 @@ class Application:
         max_x = buf.get_line_length
         max_y = buf.max_y
 
+        # File / mode commands
         if key == Key.CTRL_X:
             if buf.modified:
                 self.mode = Mode.EXIT_CONFIRM
@@ -189,11 +249,28 @@ class Application:
             self.mode = Mode.GOTO_LINE
             self.prompt.start("Go To Line: ")
             return
+
+        # Clipboard (new in 0.0.2a01)
+        if key == Key.ALT_A:
+            if self.selection.toggle(cur.x, cur.y):
+                self.message = "Mark set."
+            else:
+                self.message = "Mark off."
+            return
+        if key == Key.CTRL_K:
+            self._cut(); return
+        if key == Key.ALT_6:
+            self._copy(); return
+        if key == Key.CTRL_U:
+            self._paste(); return
+
+        # Undo / Redo
         if key == Key.CTRL_Z:
             self._do_undo(); return
         if key == Key.CTRL_Y:
             self._do_redo(); return
 
+        # Navigation
         if key == Key.CTRL_LEFT:
             cur.x = buf.get_prev_word_pos(cur.y, cur.x)
         elif key == Key.CTRL_RIGHT:
@@ -222,30 +299,31 @@ class Application:
             elif cur.y < max_y:
                 cur.y += 1
                 cur.x = 0
+
+        # Editing (snapshot + selection collapse first)
         elif key == Key.TAB:
-            self._snapshot()
+            self._pre_edit()
             cur.x = buf.insert_tab(cur.y, cur.x)
         elif key == Key.SHIFT_TAB:
-            self._snapshot()
+            self._pre_edit()
             cur.x = buf.remove_tab(cur.y, cur.x)
         elif is_backspace(key):
-            self._snapshot()
+            self._pre_edit()
             cur.x, cur.y = buf.backspace(cur.x, cur.y)
         elif key == Key.DELETE:
-            self._snapshot()
+            self._pre_edit()
             buf.delete_char(cur.x, cur.y)
         elif is_enter(key):
-            self._snapshot()
+            self._pre_edit()
             buf.insert_newline(cur.x, cur.y)
             cur.y += 1
             cur.x = 0
         elif 32 <= key <= 126:
-            self._snapshot()
+            self._pre_edit()
             buf.insert_char(cur.x, cur.y, chr(key))
             cur.x += 1
 
     def _page(self, direction, screen_rows, screen_cols):
-        """Move one viewport up/down, respecting soft wrap."""
         if self.config.soft_wrap:
             _, vy = get_visual_position(
                 self.cursor.x, self.cursor.y, self.buffer.lines,
@@ -291,6 +369,23 @@ class Application:
         self.mode = Mode.NORMAL
         self.pending_exit = False
 
+    # ── input reading (Alt-key aware) ─────────────────────────
+
+    def _read_key(self, stdscr):
+        key = stdscr.getch()
+        if key == 27:                      # ESC – possible Alt prefix
+            stdscr.nodelay(True)
+            try:
+                nxt = stdscr.getch()
+            finally:
+                stdscr.nodelay(False)
+            if nxt != -1:
+                return alt(nxt) if 0 <= nxt <= 255 else 27
+            return 27
+        if 128 <= key <= 255:              # 8-bit meta from some terminals
+            return alt(key - 128)
+        return key
+
     # ── Main loop ─────────────────────────────────────────────
 
     def main_loop(self, stdscr):
@@ -307,13 +402,20 @@ class Application:
                 vy, vx, screen_rows, screen_cols,
                 self.config.smooth_scroll_margin, self.config.soft_wrap)
 
+            sel = None
+            if self.selection.active:
+                bounds = self._current_bounds()
+                if not self.selection.is_empty(bounds):
+                    sel = bounds
+
             self.renderer.render(
                 self.buffer, self.cursor, message=self.message,
                 prompt=self.prompt, mode=self.mode,
+                selection=sel, mark_set=self.selection.active,
             )
 
             try:
-                key = stdscr.getch()
+                key = self._read_key(stdscr)
             except KeyboardInterrupt:
                 self.running = False
                 break

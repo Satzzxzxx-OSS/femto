@@ -2,7 +2,8 @@
 
 All notable changes to Femto are documented in this file.
 
-## [0.0.2a02]
+## [Unreleased / 0.0.2a03]
+- **Unicode Fix:** Width-aware layout math for CJK/emoji via `unicodedata` (Thanks @masterwusama!)
 - Replace flow: Ctrl+\ (search -> replacement -> per-match Y/N/All/Cancel)
 - Case-insensitive and regex search modes (Alt+C / Alt+R in prompts, .femtorc keys, --ignore-case / --regex CLI flags)
 - New search.py engine (line-based, wrap control, zero-length-match safety)

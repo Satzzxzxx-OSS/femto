@@ -1,0 +1,33 @@
+name: ✨ Feature Request
+description: Suggest a new feature or enhancement for Femto
+title: "[Feature]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Is your feature request related to a problem?
+      description: A clear and concise description of what the problem is.
+      placeholder: "I'm always frustrated when I can't do X..."
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Describe the solution you'd like
+      description: A clear and concise description of what you want to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: nano-comparison
+    attributes:
+      label: Does GNU Nano have this feature?
+      description: Femto is a nano-style editor. If nano has this, how does it work there? If not, why should Femto have it?
+  - type: checkboxes
+    id: pure-python
+    attributes:
+      label: Pure Python Constraint
+      description: Femto prides itself on having zero external dependencies (except `windows-curses` on Windows). 
+      options:
+        - label: I understand this feature should ideally be implementable using only the Python Standard Library.
+          required: true

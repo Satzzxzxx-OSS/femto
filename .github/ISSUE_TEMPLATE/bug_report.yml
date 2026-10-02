@@ -1,0 +1,59 @@
+name: 🐛 Bug Report
+description: Report an issue with Femto
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report! 
+        Because Femto is a terminal app, knowing your OS and Terminal Emulator is crucial.
+  - type: input
+    id: os
+    attributes:
+      label: Operating System
+      description: "e.g., Ubuntu 22.04, Windows 11, macOS Sonoma"
+      placeholder: "Windows 11"
+    validations:
+      required: true
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal Emulator
+      description: "e.g., Windows Terminal, iTerm2, Alacritty, GNOME Terminal, conhost"
+      placeholder: "Windows Terminal"
+    validations:
+      required: true
+  - type: input
+    id: python-version
+    attributes:
+      label: Python Version
+      description: "Run `python --version`"
+      placeholder: "3.11.4"
+    validations:
+      required: true
+  - type: input
+    id: femto-version
+    attributes:
+      label: Femto Version
+      description: "Run `femto --version`"
+      placeholder: "0.0.1"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Also tell us, what did you expect to happen?
+      placeholder: |
+        1. Open Femto
+        2. Press Ctrl+W
+        3. The status bar turns invisible...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output / Crash trace
+      description: Please copy and paste any relevant log output or Python tracebacks. This will be automatically formatted into code.
+      render: shell

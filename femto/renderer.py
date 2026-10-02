@@ -1,6 +1,6 @@
 """
 Terminal rendering engine for Femto using curses.
-Supports soft wrap, horizontal-scroll fallback and selection highlight.
+Soft wrap, horizontal-scroll fallback, selection + match highlighting.
 """
 
 import curses
@@ -17,6 +17,7 @@ class Renderer:
         self.bar_attr = curses.A_REVERSE
         self.prompt_attr = curses.A_REVERSE | curses.A_BOLD
         self.sel_attr = curses.A_REVERSE
+        self.match_attr = curses.A_REVERSE | curses.A_BOLD
         self.setup_colors()
 
     def setup_colors(self):
@@ -30,6 +31,7 @@ class Renderer:
             curses.init_pair(2, curses.COLOR_BLACK, curses.COLOR_YELLOW)
             self.bar_attr = curses.color_pair(1)
             self.prompt_attr = curses.color_pair(2) | curses.A_BOLD
+            self.match_attr = curses.color_pair(2)
         except curses.error:
             pass
 
@@ -39,9 +41,11 @@ class Renderer:
 
     # ── Text area ─────────────────────────────────────────────
 
-    def draw_text(self, buffer, cursor, screen_rows, screen_cols, sel=None):
+    def draw_text(self, buffer, cursor, screen_rows, screen_cols,
+                  sel=None, match=None):
         if not self.config.soft_wrap:
-            self._draw_text_hard(buffer, cursor, screen_rows, screen_cols, sel)
+            self._draw_text_hard(buffer, cursor, screen_rows, screen_cols,
+                                 sel, match)
             return
 
         visual_row = 0
@@ -55,7 +59,7 @@ class Renderer:
                 draw_y = visual_row - cursor.scroll_y
                 self.stdscr.move(draw_y, 0)
                 self.stdscr.clrtoeol()
-                self._draw_chunk(draw_y, chunk, i * screen_cols, y, sel)
+                self._draw_chunk(draw_y, chunk, i * screen_cols, y, sel, match)
                 visual_row += 1
 
         while visual_row - cursor.scroll_y < screen_rows:
@@ -66,7 +70,8 @@ class Renderer:
                 self._safe_addstr(draw_y, 0, "~", curses.A_BOLD)
             visual_row += 1
 
-    def _draw_text_hard(self, buffer, cursor, screen_rows, screen_cols, sel):
+    def _draw_text_hard(self, buffer, cursor, screen_rows, screen_cols,
+                        sel, match):
         for row in range(screen_rows):
             y = row + cursor.scroll_y
             self.stdscr.move(row, 0)
@@ -74,33 +79,51 @@ class Renderer:
             if y < len(buffer.lines):
                 x0 = cursor.scroll_x
                 chunk = buffer.lines[y][x0:x0 + screen_cols]
-                self._draw_chunk(row, chunk, x0, y, sel)
+                self._draw_chunk(row, chunk, x0, y, sel, match)
             else:
                 self._safe_addstr(row, 0, "~", curses.A_BOLD)
 
-    def _draw_chunk(self, row, chunk, x0, y, sel):
-        """Draw one visual chunk, reverse-videoing the selected span."""
+    # ── highlight machinery ───────────────────────────────────
+
+    def _overlap(self, bounds, x0, y, chunk_len):
+        """Intersection of a logical span with this chunk; (lo, hi) or None."""
+        (sx, sy), (ex, ey) = bounds
+        if not (sy <= y <= ey):
+            return None
+        line_start = sx if y == sy else 0
+        line_end = ex if y == ey else x0 + chunk_len
+        lo = max(0, line_start - x0)
+        hi = min(chunk_len, line_end - x0)
+        return (lo, hi) if lo < hi else None
+
+    def _draw_chunk(self, row, chunk, x0, y, sel, match):
         if not chunk:
             return
-        if sel is None:
+        intervals = []
+        if sel is not None:
+            iv = self._overlap(sel, x0, y, len(chunk))
+            if iv:
+                intervals.append((iv[0], iv[1], self.sel_attr))
+        if match is not None:
+            mx, my, ml = match
+            iv = self._overlap(((mx, my), (mx + ml, my)), x0, y, len(chunk))
+            if iv:
+                intervals.append((iv[0], iv[1], self.match_attr))
+        if not intervals:
             self._safe_addstr(row, 0, chunk)
             return
-        (sx, sy), (ex, ey) = sel
-        if not (sy <= y <= ey):
-            self._safe_addstr(row, 0, chunk)
-            return
-        line_start = sx if y == sy else 0
-        line_end = ex if y == ey else x0 + len(chunk)
-        lo = max(0, line_start - x0)
-        hi = min(len(chunk), line_end - x0)
-        if lo >= hi:
-            self._safe_addstr(row, 0, chunk)
-            return
-        if lo:
-            self._safe_addstr(row, 0, chunk[:lo])
-        self._safe_addstr(row, lo, chunk[lo:hi], self.sel_attr)
-        if hi < len(chunk):
-            self._safe_addstr(row, hi, chunk[hi:])
+        intervals.sort()
+        col = 0
+        for lo, hi, attr in intervals:
+            lo = max(lo, col)          # first span wins on overlap
+            if lo >= hi:
+                continue
+            if lo > col:
+                self._safe_addstr(row, col, chunk[col:lo])
+            self._safe_addstr(row, lo, chunk[lo:hi], attr)
+            col = hi
+        if col < len(chunk):
+            self._safe_addstr(row, col, chunk[col:])
 
     def _safe_addstr(self, row, col, text, attr=0):
         try:
@@ -128,7 +151,7 @@ class Renderer:
         self._draw_bar(screen_rows, status, screen_cols, self.bar_attr)
         self._draw_bar(
             screen_rows + 1,
-            "^X Exit  ^S Save  ^W Find  ^K Cut  ^U Paste  M-A Mark  ^Z Undo",
+            "^X Exit  ^S Save  ^W Find  ^\\ Replace  ^K Cut  ^U Paste  ^Z Undo",
             screen_cols, self.bar_attr,
         )
 
@@ -142,11 +165,19 @@ class Renderer:
         except curses.error:
             pass
 
-    def draw_exit_confirm(self, message, screen_rows, screen_cols):
-        display = f" {message}  (Y)es / (N)o / (C)ancel"
+    def _draw_confirm(self, display, help_text, screen_rows, screen_cols):
         self._draw_bar(screen_rows, display, screen_cols, self.prompt_attr)
-        self._draw_bar(screen_rows + 1, "Y Yes    N No    C Cancel",
-                       screen_cols, self.bar_attr)
+        self._draw_bar(screen_rows + 1, help_text, screen_cols, self.bar_attr)
+
+    def draw_exit_confirm(self, message, screen_rows, screen_cols):
+        self._draw_confirm(
+            f" {message}  (Y)es / (N)o / (C)ancel",
+            "Y Yes    N No    C Cancel", screen_rows, screen_cols)
+
+    def draw_replace_confirm(self, message, screen_rows, screen_cols):
+        self._draw_confirm(
+            f" {message}  (Y)es / (N)o / (A)ll / (C)ancel",
+            "Y Yes    N No    A All    C Cancel", screen_rows, screen_cols)
 
     def _draw_bar(self, row, text, width, attr):
         text = text.ljust(width)[:width]
@@ -166,21 +197,27 @@ class Renderer:
 
     _PROMPT_HELP = {
         "save_as": "Enter Save    ^G Cancel",
-        "search": "Enter Find Next    ^G Cancel",
+        "search": "Enter Find Next    M-C Case    M-R Regex    ^G Cancel",
+        "replace_search": "Enter Continue    M-C Case    M-R Regex    ^G Cancel",
+        "replace_with": "Enter Confirm    ^G Cancel",
         "goto_line": "Enter Jump    ^G Cancel",
     }
 
     def render(self, buffer, cursor, message="", prompt=None, mode="normal",
-               selection=None, mark_set=False):
+               selection=None, mark_set=False, match=None):
         self.stdscr.erase()
         screen_rows, screen_cols = self.get_dimensions()
-        self.draw_text(buffer, cursor, screen_rows, screen_cols, selection)
+        self.draw_text(buffer, cursor, screen_rows, screen_cols,
+                       selection, match)
 
         if prompt and prompt.active and mode in self._PROMPT_HELP:
             self.draw_prompt(prompt, screen_rows, screen_cols,
                              self._PROMPT_HELP[mode])
         elif mode == "exit_confirm":
             self.draw_exit_confirm(message, screen_rows, screen_cols)
+            self.draw_cursor(cursor, buffer, screen_cols)
+        elif mode == "replace_confirm":
+            self.draw_replace_confirm(message, screen_rows, screen_cols)
             self.draw_cursor(cursor, buffer, screen_cols)
         else:
             self.draw_status_bar(buffer, cursor, screen_rows, screen_cols,

@@ -4,6 +4,8 @@ Text buffer management for Femto.
 
 import os
 
+from femto.search import SearchOptions, find_next
+
 class Buffer:
     def __init__(self, config):
         self.lines = [""]
@@ -113,17 +115,13 @@ class Buffer:
         return x + 1
 
     def find_text(self, term, start_x, start_y):
-        if not term: return None
-        num_lines = len(self.lines)
-        if num_lines == 0: return None
-        for i in range(num_lines):
-            y = (start_y + i) % num_lines
-            line = self.lines[y]
-            search_from = start_x if i == 0 else 0
-            pos = line.find(term, search_from)
-            if pos != -1:
-                return pos, y
-        return None
+        """Case-sensitive plain search (back-compat wrapper).
+
+        Returns (x, y) or None. Full-featured search (case/regex/wrap
+        control, match length) lives in femto.search.
+        """
+        hit = find_next(self, term, SearchOptions(), start_x, start_y)
+        return (hit[0], hit[1]) if hit else None
 
     def get_line_length(self, y):
         if 0 <= y < len(self.lines):

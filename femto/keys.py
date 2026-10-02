@@ -4,13 +4,10 @@ Keybindings and input mapping for Femto.
 
 import curses
 
-# Alt-modified keys are encoded with this bit so they never collide
-# with printable ASCII (0-255) or curses KEY_* codes (< 512).
 ALT_MASK = 0x1000
 
 
 def alt(code):
-    """Encode an Alt-modified key."""
     return code | ALT_MASK
 
 
@@ -24,25 +21,30 @@ def alt_code(key):
 
 class Key:
     # File / mode commands
-    CTRL_X = 24      # Exit
-    CTRL_S = 19      # Save
-    CTRL_G = 7       # Cancel prompt
+    CTRL_X = 24      
+    CTRL_S = 19     
+    CTRL_G = 7
 
     # Navigation helpers (nano-style)
-    CTRL_A = 1       # Home
-    CTRL_E = 5       # End
+    CTRL_A = 1       
+    CTRL_E = 5    
 
     # Search / goto / undo
-    CTRL_W = 23      # Search
-    CTRL_T = 20      # Go To Line
-    CTRL_Z = 26      # Undo
-    CTRL_Y = 25      # Redo
+    CTRL_W = 23     
+    CTRL_T = 20     
+    CTRL_Z = 26     
+    CTRL_Y = 25     
 
-    # Clipboard (new in 0.0.2a01)
-    CTRL_K = 11           # Cut line / selection
-    CTRL_U = 21           # Paste
-    ALT_A = alt(ord('a')) # Set / clear mark
-    ALT_6 = alt(ord('6')) # Copy line / selection
+    # Replace (new in 0.0.2a02)
+    CTRL_BACKSLASH = 28   # Ctrl+\ - replace flow
+    ALT_C = alt(ord('c'))  # toggle case-insensitive (in search prompts)
+    ALT_R = alt(ord('r'))  # toggle regex     (in search prompts)
+
+    # Clipboard
+    CTRL_K = 11           
+    CTRL_U = 21           
+    ALT_A = alt(ord('a')) 
+    ALT_6 = alt(ord('6'))
 
     # Arrows
     ARROW_UP = curses.KEY_UP

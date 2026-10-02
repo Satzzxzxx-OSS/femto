@@ -38,6 +38,14 @@ def build_parser():
         "--no-wrap", action="store_true",
         help="disable soft line wrapping (use horizontal scrolling)",
     )
+    parser.add_argument(
+        "--ignore-case", action="store_true",
+        help="case-insensitive search by default"
+    )
+    parser.add_argument(
+        "--regex", action="store_true",
+        help="treat search terms as regular expressions"
+    )
     return parser
 
 
@@ -51,6 +59,10 @@ def main(argv=None):
         app.config.smooth_scroll_margin = args.scroll_margin
     if args.no_wrap:
         app.config.soft_wrap = False
+    if args.ignore_case:
+        app.search_options.ignore_case = True
+    if args.regex:
+        app.search_options.regex = True
 
     app.run()
     return 0

@@ -2,7 +2,12 @@
 
 All notable changes to Femto are documented in this file.
 
-## [0.0.2a01]
+## [0.0.2a02]
+- Replace flow: Ctrl+\ (search -> replacement -> per-match Y/N/All/Cancel)
+- Case-insensitive and regex search modes (Alt+C / Alt+R in prompts, .femtorc keys, --ignore-case / --regex CLI flags)
+- New search.py engine (line-based, wrap control, zero-length-match safety)
+- Live match highlighting (yellow) independent of selection highlight
+- "Replaced N occurrence(s)" reporting
 - Anchor-based selection: Alt+A sets/clears the mark, reverse-video highlight
 - Cut (Ctrl+K), Copy (Alt+6), Paste (Ctrl+U) with nano line-fallback semantics
 - New clipboard.py (Selection + Clipboard); typing replaces an active selection

@@ -5,19 +5,38 @@ Terminal rendering engine for Femto using curses.
 import curses
 from femto import __version__, __app_name__
 
+# Bar style:
+#   "color"   -> black text on cyan / yellow bars (classic, high contrast)
+#   "reverse" -> plain reverse video (immune to custom console palettes)
+BAR_STYLE = "reverse"
+
 
 class Renderer:
     """Handles all drawing operations to the terminal."""
 
     def __init__(self, stdscr):
         self.stdscr = stdscr
+        # Fallback attributes if colors are unavailable
+        self.bar_attr = curses.A_REVERSE
+        self.prompt_attr = curses.A_REVERSE | curses.A_BOLD
         self.setup_colors()
 
     def setup_colors(self):
-        curses.start_color()
-        curses.use_default_colors()
-        curses.init_pair(1, curses.COLOR_WHITE, curses.COLOR_BLUE)
-        curses.init_pair(2, curses.COLOR_YELLOW, curses.COLOR_BLACK)
+        """Initialise high-contrast colour pairs (Windows-safe)."""
+        if BAR_STYLE != "color":
+            return
+        try:
+            curses.start_color()
+            if not curses.has_colors():
+                return
+            # NOTE: deliberately NO use_default_colors() here - on
+            # windows-curses it can wash out bar backgrounds.
+            curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_CYAN)
+            curses.init_pair(2, curses.COLOR_BLACK, curses.COLOR_YELLOW)
+            self.bar_attr = curses.color_pair(1)
+            self.prompt_attr = curses.color_pair(2) | curses.A_BOLD
+        except curses.error:
+            pass  # keep the reverse-video fallback
 
     def get_dimensions(self):
         height, width = self.stdscr.getmaxyx()
@@ -53,14 +72,14 @@ class Renderer:
             status += "  [Modified]"
         status += f"  Ln {cursor.y + 1}, Col {cursor.x + 1}"
         if message:
-            status += f"  │ {message}"
+            status += f"  | {message}"
 
-        self._draw_bar(screen_rows, status, screen_cols, curses.color_pair(1))
+        self._draw_bar(screen_rows, status, screen_cols, self.bar_attr)
         self._draw_bar(
             screen_rows + 1,
             "^X Exit  ^S Save  ^W Find  ^T Line  ^Z Undo  ^Y Redo",
             screen_cols,
-            curses.color_pair(1),
+            self.bar_attr,
         )
 
     def draw_prompt(self, prompt, screen_rows, screen_cols, help_text=""):
@@ -68,11 +87,9 @@ class Renderer:
             screen_rows,
             prompt.get_display(screen_cols),
             screen_cols,
-            curses.color_pair(2),
+            self.prompt_attr,
         )
-        self._draw_bar(
-            screen_rows + 1, help_text, screen_cols, curses.color_pair(1)
-        )
+        self._draw_bar(screen_rows + 1, help_text, screen_cols, self.bar_attr)
         cx = min(prompt.get_cursor_x(), screen_cols - 1)
         try:
             self.stdscr.move(screen_rows, cx)
@@ -81,12 +98,12 @@ class Renderer:
 
     def draw_exit_confirm(self, message, screen_rows, screen_cols):
         display = f" {message}  (Y)es / (N)o / (C)ancel"
-        self._draw_bar(screen_rows, display, screen_cols, curses.color_pair(2))
+        self._draw_bar(screen_rows, display, screen_cols, self.prompt_attr)
         self._draw_bar(
             screen_rows + 1,
             "Y Yes    N No    C Cancel",
             screen_cols,
-            curses.color_pair(1),
+            self.bar_attr,
         )
 
     # ── Helpers ───────────────────────────────────────────────

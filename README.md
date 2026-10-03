@@ -1,28 +1,31 @@
-# Femto v0.0.1
+# Femto v0.0.2
      
 Femto is a tiny, nano-style terminal text editor written in **pure Python**.
 It ships with zero runtime dependencies on POSIX system (standard-library `curses` only) and automatically pulls `windows-curses` on Windows.
 
+Femto supports multi-buffer editing, soft line wrapping, syntax highlighting, regex search & replace, mouse support, and is fully Unicode (CJK/Emoji) aware.
+
 ## Install
 
 ```bash
+# From PyPI (Recommended)
+pipx install femto-editor
+# or
+pip install femto-editor
+
 # From source
+git clone https://github.com/codewithzaqar/femto.git
+cd femto
 pip install .
-
-# Or directly from the repository
-pip install git+https://github.com/codewithzaqar/femto
-
-# Developers: run without installing
-python -m femto myfile.txt
 ```
 
-After installation the `femto` command is available globally.
+After installation, the `femto` command is available globally.
 
 ## Usage
 ```bash
-femto [file]        # open or create a file
-femto --tab=size 2 x.py # override tab width
-femto --no-wrap long.log # horizontal scrolling instead of soft wrap
+femto [file ...]        # open one or multiple files
+femto --line-numbers a.py x.py
+femto --tab-size 2 --regex x.py
 femto --version
 ```
 
@@ -43,24 +46,34 @@ femto --version
 |`Ctrl+N`|Toggle line numbers|||
 |`Ctrl+D`|Toggle mouse support|Mouse wheel|Scroll viewport|
 |`Ctrl+F` / `Ctrl+L`|Next / previous buffer|||
-|Mouse click|Move cursor to click point|||
-
-```bash
-femto a.py b.py c.py  # open multiple buffers; [1/3] shown in status bar
-```
-
-`.femtorc`: `make_backup = true` keeps a `name~` backup on every save.
+|`Mouse click`|Move cursor to click point|||
 
 ## Configuration (`~/.femtorc` or `./.femtorc`)
 
+Femto is highly customizable via a simple `key = value` configuration file.
+
 ```ini
-# comment
+# Indentation
 tab_size = 4
+
+# Viewport
 smooth_scroll_margin = 3
 soft_wrap = true
+show_line_numbers = false
+syntax_highlight = true
+
+# Search
+ignore_case = false
+regex_search = false
+
+# Input & I/O
+mouse = false
+make_backup = false
 ```
 
 ## Running the tests
+
+Femto includes a comprehensive `unittest` regression suite that runs headlessely (no terminal required).
 
 ```bash
 python -m unittest discover -s tests -v

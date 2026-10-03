@@ -40,6 +40,7 @@ class Key:
     ALT_C = alt(ord('c'))  
     ALT_R = alt(ord('r'))
     ALT_N = alt(ord('n'))  # Toggle line numbers (new in 0.0.2a03)
+    ALT_M = alt(ord('m'))  # Toggle mouse support (new in 0.0.2a04)
 
     # Clipboard
     CTRL_K = 11           

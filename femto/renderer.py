@@ -209,6 +209,8 @@ class Renderer:
             status += "  [Modified]"
         if mark_set:
             status += "  [Mark]"
+        if self.config.mouse:
+            status += "  [Mouse]"
         status += f"  Ln {cursor.y + 1}, Col {cursor.x + 1}"
         if message:
             status += f"  | {message}"
@@ -216,7 +218,7 @@ class Renderer:
         self._draw_bar(screen_rows, status, screen_cols, self.bar_attr)
         self._draw_bar(
             screen_rows + 1,
-            "^X Exit  ^S Save  ^W Find  ^\\ Replace  ^K Cut  ^U Paste  M-N Lines",
+            "^X Exit  ^S Save  ^W Find  ^K Cut  ^U Paste  M-N Lines  M-M Mouse",
             screen_cols, self.bar_attr,
         )
 

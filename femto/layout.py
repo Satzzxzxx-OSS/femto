@@ -89,6 +89,20 @@ def get_visual_position(x, y, lines, width, soft_wrap=True):
 
     return vx, vy + offset_rows
 
+def col_to_index(line, display_col):
+    """Convert a display-column offset into a character index in `line`.
+
+    A display column that falls inside a wide character maps to the
+    start of the character.
+    """
+    col = 0
+    for i, ch in enumerate(line):
+        w = char_width(ch)
+        if display_col < col + w:
+            return i
+        col += w
+    return len(line)
+
 
 def get_logical_from_visual(target_vy, lines, width, soft_wrap=True):
     """Inverse of get_visual_position on the row axis."""
@@ -102,3 +116,26 @@ def get_logical_from_visual(target_vy, lines, width, soft_wrap=True):
             return y
         vy += rows
     return max(0, len(lines) - 1)
+
+def get_logical_from_visual_point(target_vy, target_vx, lines, width,
+                                  soft_wrap=True):
+    """
+    Map a visual (row, display-column) point to logical (x, y).
+
+    Used by mouse click-to-cursor.  In hard-wrap mode the mapping is
+    the identity (the caller has already added scroll offsets).
+    """
+    if not soft_wrap:
+        return target_vx, target_vy
+
+    vy = 0
+    for y, line in enumerate(lines):
+        chunks = chunk_line(line, width)
+        rows = len(chunks)
+        if vy + rows > target_vy:
+            i = target_vy - vy
+            offset = sum(str_width(c) for c in chunks[:i])
+            return col_to_index(line, offset + target_vx), y
+        vy += rows
+    y = max(0, len(lines) - 1)
+    return len(lines[y]), y

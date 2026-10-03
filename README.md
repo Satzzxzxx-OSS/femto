@@ -41,6 +41,8 @@ femto --version
 |`Ctrl+\`|Replace (search -> with -> Y/N/A/C)|`Alt+C`|Toggle case-insensitive (in search prompt)|
 |`Alt+R`|Toggle regex mode (in search prompt)|||
 |`Alt+N`|Toggle line numbers|||
+|`Alt+M`|Toggle mouse support|Mouse wheel|Scroll viewport|
+|Mouse click|Move cursor to click point|||
 
 ## Configuration (`~/.femtorc` or `./.femtorc`)
 

@@ -20,6 +20,7 @@ from femto.clipboard import Clipboard, Selection
 from femto.config import Config
 from femto.cursor import Cursor
 from femto.history import History
+from femto.layout import col_to_index, get_logical_from_visual_point
 from femto.layout import (
     chunk_line,
     get_logical_from_visual,
@@ -224,6 +225,32 @@ class TestSearch(unittest.TestCase):
     def test_flag_label(self):
         self.assertEqual(SearchOptions(True, True).flag_label(), " [ir]")
         self.assertEqual(SearchOptions().flag_label(), "")
+
+
+class TestMouseMapping(unittest.TestCase):
+    def test_col_to_index_ascii(self):
+        self.assertEqual(col_to_index("hello", 3), 3)
+        self.assertEqual(col_to_index("hello", 99), 5)
+
+    def test_col_to_index_wide(self):
+        # Each CJK char occupies 2 display columns
+        self.assertEqual(col_to_index("漢字", 0), 0)
+        self.assertEqual(col_to_index("漢字", 2), 1)
+        self.assertEqual(col_to_index("漢字", 3), 1)   # mid-char clamps left
+
+    def test_visual_point_roundtrip(self):
+        lines = ["0123456789ABCDE"]
+        x, y = get_logical_from_visual_point(1, 2, lines, 10)
+        self.assertEqual((x, y), (12, 0))
+
+    def test_visual_point_beyond_eof(self):
+        x, y = get_logical_from_visual_point(99, 99, ["ab", "cd"], 80)
+        self.assertEqual((x, y), (2, 1))
+
+    def test_visual_point_hard_wrap_identity(self):
+        self.assertEqual(
+            get_logical_from_visual_point(4, 7, ["ab"], 80, soft_wrap=False),
+            (7, 4))
 
 
 if __name__ == "__main__":

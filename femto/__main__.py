@@ -54,6 +54,10 @@ def build_parser():
         "--no-highlight", action="store_true",
         help="disable syntax highlighting"
     )
+    parser.add_argument(
+        "--mouse", action="store_true",
+        help="enable mouse wheel scrolling and click-to-cursor"
+    )
     return parser
 
 
@@ -75,6 +79,8 @@ def main(argv=None):
         app.config.show_line_numbers = True
     if args.no_highlight:
         app.config.syntax_highlight = False
+    if args.mouse:
+        app.config.mouse = True
 
     app.run()
     return 0

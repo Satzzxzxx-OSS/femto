@@ -14,7 +14,8 @@ class Config:
         self.ignore_case = False      
         self.regex_search = False 
         self.show_line_numbers = False   
-        self.syntax_highlight = True    
+        self.syntax_highlight = True
+        self.mouse = False    
         self.load()
 
     def load(self):
@@ -52,5 +53,7 @@ class Config:
                             self.show_line_numbers = val.lower() in ("true", "1", "yes")
                         elif key == "syntax_highlight":
                             self.syntax_highlight = val.lower() in ("true", "1", "yes")
+                        elif key == "mouse":
+                            self.mouse = val.lower() in ("true", "1", "yes")
         except Exception:
             pass

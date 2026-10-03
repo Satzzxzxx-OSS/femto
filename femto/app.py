@@ -8,7 +8,11 @@ import curses
 from femto.buffer import Buffer
 from femto.cursor import Cursor
 from femto.renderer import Renderer
-from femto.layout import get_visual_position, get_logical_from_visual
+from femto.layout import (
+    get_visual_position,
+    get_logical_from_visual,
+    get_logical_from_visual_point,
+)
 from femto.prompt import Prompt
 from femto.history import History
 from femto.config import Config
@@ -57,7 +61,7 @@ class Application:
         self.pending_exit = False
         self.last_search = ""
         self.last_found_pos = None
-        self.last_match = None          # (x, y, length) of highlighted match
+        self.last_match = None
         self.replace_term = ""
         self.replace_with = ""
         self.replace_count = 0
@@ -67,6 +71,23 @@ class Application:
 
     def _snapshot(self):
         self.history.push(self.buffer.lines, self.cursor.x, self.cursor.y)
+
+    def _gutter_width(self):
+        if not self.config.show_line_numbers:
+            return 0
+        return len(str(len(self.buffer.lines))) + 1
+
+    def _set_mouse(self, on):
+        """Enable/disable terminal mouse reporting."""
+        try:
+            if on:
+                curses.mousemask(curses.ALL_MOUSE_EVENTS |
+                                 curses.REPORT_MOUSE_POSITION)
+                curses.mouseinterval(30)
+            else:
+                curses.mousemask(0)
+        except curses.error:
+            pass
 
     def _pre_edit(self):
         self._snapshot()
@@ -87,7 +108,6 @@ class Application:
         return f"{base}{self.search_options.flag_label()}: "
 
     def _maybe_toggle(self, key):
-        """Alt+C / Alt+R inside search-family prompts."""
         if key == Key.ALT_C:
             self.search_options.ignore_case = not self.search_options.ignore_case
             self.prompt.label = self._search_label(self._prompt_base)
@@ -98,7 +118,7 @@ class Application:
             return True
         return False
 
-    # ── clipboard (unchanged from a01) ────────────────────────
+    # ── clipboard ─────────────────────────────────────────────
 
     def _cut(self):
         self._snapshot()
@@ -143,6 +163,45 @@ class Application:
                                            self.cursor.x, self.cursor.y)
         self.cursor.x, self.cursor.y = nx, ny
         self.message = f"Pasted {len(self.clipboard.text)} chars."
+
+    # ── mouse ─────────────────────────────────────────────────
+
+    def _handle_mouse(self, stdscr):
+        """Route pointer events; only active in NORMAL mode."""
+        if self.mode != Mode.NORMAL:
+            return
+        try:
+            _, mx, my, _, bstate = curses.getmouse()
+        except curses.error:
+            return
+
+        screen_rows, screen_cols = self.renderer.get_dimensions()
+        gutter = self._gutter_width()
+        text_cols = max(1, screen_cols - gutter)
+
+        btn4 = getattr(curses, "BUTTON4_PRESSED", None)   # wheel up
+        btn5 = getattr(curses, "BUTTON5_PRESSED", None)   # wheel down
+        if btn4 and (bstate & btn4):
+            self._wheel(-3)
+            return
+        if btn5 and (bstate & btn5):
+            self._wheel(3)
+            return
+
+        if bstate & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED):
+            if my >= screen_rows:          # clicked on status/help bars
+                return
+            vy = my + self.cursor.scroll_y
+            vx = max(0, mx - gutter) + self.cursor.scroll_x
+            x, y = get_logical_from_visual_point(
+                vy, vx, self.buffer.lines, text_cols, self.config.soft_wrap)
+            self.cursor.set_pos(x, y,
+                                self.buffer.get_line_length,
+                                self.buffer.max_y)
+
+    def _wheel(self, dy):
+        self.cursor.move(0, dy,
+                         self.buffer.get_line_length, self.buffer.max_y)
 
     # ── input routing ─────────────────────────────────────────
 
@@ -288,7 +347,7 @@ class Application:
         if replaced:
             nx = mx + len(self.replace_with)
             if ml == 0 and not self.replace_with:
-                nx = mx + 1            # zero-length match: force progress
+                nx = mx + 1
         else:
             nx = mx + ml if ml else mx + 1
         hit = find_next(self.buffer, self.replace_term, self.search_options,
@@ -310,7 +369,7 @@ class Application:
         else:
             self.message = f"Replaced {self.replace_count} occurrence(s)."
 
-    # ── goto / exit (unchanged) ───────────────────────────────
+    # ── goto / exit ───────────────────────────────────────────
 
     def _handle_goto_line(self, key):
         result = self.prompt.handle_key(key)
@@ -400,16 +459,24 @@ class Application:
         if key == Key.CTRL_U:
             self._paste(); return
 
+        # Toggles
+        if key == Key.ALT_N:
+            self.config.show_line_numbers = not self.config.show_line_numbers
+            self.message = ("Line numbers " +
+                            ("on" if self.config.show_line_numbers else "off"))
+            return
+        if key == Key.ALT_M:
+            self.config.mouse = not self.config.mouse
+            self._set_mouse(self.config.mouse)
+            self.message = ("Mouse " +
+                            ("on" if self.config.mouse else "off"))
+            return
+
         # Undo / Redo
         if key == Key.CTRL_Z:
             self._do_undo(); return
         if key == Key.CTRL_Y:
             self._do_redo(); return
-
-        if key == Key.ALT_N:
-            self.config.show_line_numbers = not self.config.show_line_numbers
-            self.message = "Line numbers " + ("on" if self.config.show_line_numbers else "off")
-            return
 
         # Navigation
         if key == Key.CTRL_LEFT:
@@ -468,10 +535,11 @@ class Application:
         if self.config.soft_wrap:
             _, vy = get_visual_position(
                 self.cursor.x, self.cursor.y, self.buffer.lines,
-                screen_cols, True)
+                max(1, screen_cols - self._gutter_width()), True)
             target = max(0, vy + direction * screen_rows)
             y = get_logical_from_visual(target, self.buffer.lines,
-                                        screen_cols, True)
+                                        max(1, screen_cols - self._gutter_width()),
+                                        True)
         else:
             y = self.cursor.y + direction * screen_rows
         self.cursor.set_pos(self.cursor.x, y,
@@ -512,35 +580,61 @@ class Application:
         self.mode = Mode.NORMAL
         self.pending_exit = False
 
-    # ── input reading ─────────────────────────────────────────
+    # ── input reading (Alt + CSI fallbacks) ───────────────────
 
     def _read_key(self, stdscr):
         key = stdscr.getch()
-        if key == 27:
+        if key == 27:                              # ESC prefix
             stdscr.nodelay(True)
             try:
                 nxt = stdscr.getch()
             finally:
                 stdscr.nodelay(False)
-            if nxt != -1:
-                return alt(nxt) if 0 <= nxt <= 255 else 27
-            return 27
-        if 128 <= key <= 255:
+            if nxt == -1:
+                return 27
+            if nxt == ord('['):
+                # Raw CSI sequence curses did not translate
+                # (legacy conhost / Windows console fallbacks)
+                return self._read_csi(stdscr)
+            return alt(nxt) if 0 <= nxt <= 255 else 27
+        if 128 <= key <= 255:                      # 8-bit meta
             return alt(key - 128)
         return key
+
+    def _read_csi(self, stdscr):
+        """Parse leftover CSI sequences; returns a Key or -1 (swallowed)."""
+        seq = []
+        stdscr.nodelay(True)
+        try:
+            while True:
+                ch = stdscr.getch()
+                if ch == -1:
+                    break
+                seq.append(ch)
+                if 0x40 <= ch <= 0x7E:             # final byte
+                    break
+        finally:
+            stdscr.nodelay(False)
+        code = "".join(chr(c) for c in seq)
+
+        if code == "Z":                            # ESC [ Z  – Shift+Tab
+            return Key.SHIFT_TAB
+        if code.endswith("D") and (";5" in code or code == "5D"):
+            return Key.CTRL_LEFT                   # ESC [ 1 ; 5 D
+        if code.endswith("C") and (";5" in code or code == "5C"):
+            return Key.CTRL_RIGHT                  # ESC [ 1 ; 5 C
+        return -1                                  # unknown: swallow
 
     # ── Main loop ─────────────────────────────────────────────
 
     def main_loop(self, stdscr):
         _ignore_suspend()
         self.renderer = Renderer(stdscr, self.config)
+        self._set_mouse(self.config.mouse)
 
         while self.running:
             screen_rows, screen_cols = self.renderer.get_dimensions()
-            
-            # Calculate gutter offset so text wraps correctly
-            gutter_width = len(str(len(self.buffer.lines))) + 1 if self.config.show_line_numbers else 0
-            text_cols = max(1, screen_cols - gutter_width)
+            text_cols = max(1, screen_cols - self._gutter_width())
 
             vx, vy = get_visual_position(
                 self.cursor.x, self.cursor.y, self.buffer.lines,
@@ -569,6 +663,14 @@ class Application:
                 break
 
             if key == Key.RESIZE:
+                # Some terminals drop mouse reporting on resize
+                if self.config.mouse:
+                    self._set_mouse(True)
+                continue
+            if key == curses.KEY_MOUSE:
+                self._handle_mouse(stdscr)
+                continue
+            if key < 0:
                 continue
 
             self.handle_input(key, screen_rows, screen_cols)

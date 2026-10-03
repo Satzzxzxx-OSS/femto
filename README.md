@@ -40,6 +40,7 @@ femto --version
 |`Alt+6`|Copy line or selection|`Ctrl+U`|Paste clipboard|
 |`Ctrl+\`|Replace (search -> with -> Y/N/A/C)|`Alt+C`|Toggle case-insensitive (in search prompt)|
 |`Alt+R`|Toggle regex mode (in search prompt)|||
+|`Alt+N`|Toggle line numbers|||
 
 ## Configuration (`~/.femtorc` or `./.femtorc`)
 

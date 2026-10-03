@@ -1,3 +1,5 @@
 tab_size = 4
 smooth_scroll_margin = 3
-soft_wrap = true               
+soft_wrap = true
+show_line_numbers = true
+syntax_highlight = 1

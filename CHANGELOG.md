@@ -2,7 +2,11 @@
 
 All notable changes to Femto are documented in this file.
 
-## [Unreleased / 0.0.2a03]
+## [0.0.2a03]
+- Line number gutter (dynamic width, `Alt+N` toggle, `.femtorc` & CLI flags)
+- Basic Python syntax highlighting (keywords, strings, comments, numbers)
+- Overlay rendering engine (syntax < search match < selection priority)
+- Full integration with width-aware layout match (PR #8)
 - **Unicode Fix:** Width-aware layout math for CJK/emoji via `unicodedata` (Thanks @masterwusama!)
 - Replace flow: Ctrl+\ (search -> replacement -> per-match Y/N/All/Cancel)
 - Case-insensitive and regex search modes (Alt+C / Alt+R in prompts, .femtorc keys, --ignore-case / --regex CLI flags)

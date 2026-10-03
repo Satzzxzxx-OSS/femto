@@ -11,8 +11,10 @@ class Config:
         self.tab_size = 4
         self.smooth_scroll_margin = 3
         self.soft_wrap = True
-        self.ignore_case = False      # new in 0.0.2a02
-        self.regex_search = False     # new in 0.0.2a02
+        self.ignore_case = False      
+        self.regex_search = False 
+        self.show_line_numbers = False   
+        self.syntax_highlight = True    
         self.load()
 
     def load(self):
@@ -46,5 +48,9 @@ class Config:
                             self.ignore_case = val.lower() in ("true", "1", "yes")
                         elif key == "regex_search":
                             self.regex_search = val.lower() in ("true", "1", "yes")
+                        elif key == "show_line_numbers":
+                            self.show_line_numbers = val.lower() in ("true", "1", "yes")
+                        elif key == "syntax_highlight":
+                            self.syntax_highlight = val.lower() in ("true", "1", "yes")
         except Exception:
             pass

@@ -46,6 +46,14 @@ def build_parser():
         "--regex", action="store_true",
         help="treat search terms as regular expressions"
     )
+    parser.add_argument(
+        "--line-numbers", action="store_true",
+        help="show line number gutter"
+    )
+    parser.add_argument(
+        "--no-highlight", action="store_true",
+        help="disable syntax highlighting"
+    )
     return parser
 
 
@@ -63,6 +71,10 @@ def main(argv=None):
         app.search_options.ignore_case = True
     if args.regex:
         app.search_options.regex = True
+    if args.line_numbers:
+        app.config.show_line_numbers = True
+    if args.no_highlight:
+        app.config.syntax_highlight = False
 
     app.run()
     return 0

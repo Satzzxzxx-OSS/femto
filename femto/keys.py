@@ -36,9 +36,10 @@ class Key:
     CTRL_Y = 25     
 
     # Replace (new in 0.0.2a02)
-    CTRL_BACKSLASH = 28   # Ctrl+\ - replace flow
-    ALT_C = alt(ord('c'))  # toggle case-insensitive (in search prompts)
-    ALT_R = alt(ord('r'))  # toggle regex     (in search prompts)
+    CTRL_BACKSLASH = 28 
+    ALT_C = alt(ord('c'))  
+    ALT_R = alt(ord('r'))
+    ALT_N = alt(ord('n'))  # Toggle line numbers (new in 0.0.2a03)
 
     # Clipboard
     CTRL_K = 11           

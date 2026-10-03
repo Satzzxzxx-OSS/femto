@@ -406,6 +406,11 @@ class Application:
         if key == Key.CTRL_Y:
             self._do_redo(); return
 
+        if key == Key.ALT_N:
+            self.config.show_line_numbers = not self.config.show_line_numbers
+            self.message = "Line numbers " + ("on" if self.config.show_line_numbers else "off")
+            return
+
         # Navigation
         if key == Key.CTRL_LEFT:
             cur.x = buf.get_prev_word_pos(cur.y, cur.x)
@@ -532,12 +537,16 @@ class Application:
 
         while self.running:
             screen_rows, screen_cols = self.renderer.get_dimensions()
+            
+            # Calculate gutter offset so text wraps correctly
+            gutter_width = len(str(len(self.buffer.lines))) + 1 if self.config.show_line_numbers else 0
+            text_cols = max(1, screen_cols - gutter_width)
 
             vx, vy = get_visual_position(
                 self.cursor.x, self.cursor.y, self.buffer.lines,
-                screen_cols, self.config.soft_wrap)
+                text_cols, self.config.soft_wrap)
             self.cursor.update_scroll(
-                vy, vx, screen_rows, screen_cols,
+                vy, vx, screen_rows, text_cols,
                 self.config.smooth_scroll_margin, self.config.soft_wrap)
 
             sel = None

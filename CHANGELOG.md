@@ -2,7 +2,9 @@
 
 All notable changes to Femto are documented in this file.
 
-## [0.0.2a04]
+## [0.0.2a04+rebind]
+- All Alt bindings moved to Ctrl for terminal reliability (esp, Windows): Mark Ctrl+B, Copy Ctrl+P, Case Ctrl+O, Regex Ctrl+R, Lines Ctrl+N, Mouse Ctrl+D
+- Alt decoding machinery retained for calibration but ships unbound
 - Mouse support: wheel scrolling + click-to-cursor (Alt+M / --mouse / .femtorc)
 - Click mapping is width-aware (CJK-safe) and soft-wrap aware
 - Windows conhost fallbacks: raw CSI parser restores Shift+Tab (ESC[Z) and Ctrl+Arrow (ESC[1;5C/D) on legacy consoles (closes seeded Shift+Tab issue)

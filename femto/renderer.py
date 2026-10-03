@@ -218,7 +218,7 @@ class Renderer:
         self._draw_bar(screen_rows, status, screen_cols, self.bar_attr)
         self._draw_bar(
             screen_rows + 1,
-            "^X Exit  ^S Save  ^W Find  ^K Cut  ^U Paste  M-N Lines  M-M Mouse",
+            "^X Exit  ^S Save  ^W Find  ^K Cut  ^U Paste  ^N Lines  ^D Mouse",
             screen_cols, self.bar_attr,
         )
 
@@ -267,8 +267,8 @@ class Renderer:
 
     _PROMPT_HELP = {
         "save_as": "Enter Save    ^G Cancel",
-        "search": "Enter Find Next    M-C Case    M-R Regex    ^G Cancel",
-        "replace_search": "Enter Continue    M-C Case    M-R Regex    ^G Cancel",
+        "search": "Enter Find Next    ^O Case    ^R Regex    ^G Cancel",
+        "replace_search": "Enter Continue    ^O Case    ^R Regex    ^G Cancel",
         "replace_with": "Enter Confirm    ^G Cancel",
         "goto_line": "Enter Jump    ^G Cancel",
     }

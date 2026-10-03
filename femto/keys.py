@@ -19,34 +19,42 @@ def alt_code(key):
     return key & ~ALT_MASK
 
 
+# Legacy Alt calibration tables (kept for --key-debug users; no Alt
+# bindings ship by default anymore - Ctrl is used instead).
+ALT_BASES = ""
+CONHOST_ALT_MAP = {}
+
+
 class Key:
     # File / mode commands
-    CTRL_X = 24      
-    CTRL_S = 19     
+    CTRL_X = 24
+    CTRL_S = 19
     CTRL_G = 7
 
-    # Navigation helpers (nano-style)
-    CTRL_A = 1       
-    CTRL_E = 5    
+    # Navigation helpers
+    CTRL_A = 1
+    CTRL_E = 5
 
     # Search / goto / undo
-    CTRL_W = 23     
-    CTRL_T = 20     
-    CTRL_Z = 26     
-    CTRL_Y = 25     
+    CTRL_W = 23
+    CTRL_T = 20
+    CTRL_Z = 26
+    CTRL_Y = 25
 
-    # Replace (new in 0.0.2a02)
-    CTRL_BACKSLASH = 28 
-    ALT_C = alt(ord('c'))  
-    ALT_R = alt(ord('r'))
-    ALT_N = alt(ord('n'))  # Toggle line numbers (new in 0.0.2a03)
-    ALT_M = alt(ord('m'))  # Toggle mouse support (new in 0.0.2a04)
+    # Replace
+    CTRL_BACKSLASH = 28
+    CTRL_O = 15
+    CTRL_R = 18
+
+    # View toggles
+    CTRL_N = 14
+    CTRL_D = 4
 
     # Clipboard
-    CTRL_K = 11           
-    CTRL_U = 21           
-    ALT_A = alt(ord('a')) 
-    ALT_6 = alt(ord('6'))
+    CTRL_K = 11
+    CTRL_U = 21
+    CTRL_B = 2
+    CTRL_P = 16
 
     # Arrows
     ARROW_UP = curses.KEY_UP

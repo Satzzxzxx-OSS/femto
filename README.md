@@ -36,12 +36,12 @@ femto --version
 |`Arrows`|Move|`Ctrl+<-/->`|Word jump|
 |`Home/End`, `Ctrl+A/E`|Line start/end|`PgUp/PgDn`|Page scroll|
 |`Tab`/`Shift+Tab`|Indent / unindent|`Enter`|New line|
-|`Alt+A`|Set / clear mark|`Ctrl+K`|Cut line or selection|
-|`Alt+6`|Copy line or selection|`Ctrl+U`|Paste clipboard|
-|`Ctrl+\`|Replace (search -> with -> Y/N/A/C)|`Alt+C`|Toggle case-insensitive (in search prompt)|
-|`Alt+R`|Toggle regex mode (in search prompt)|||
-|`Alt+N`|Toggle line numbers|||
-|`Alt+M`|Toggle mouse support|Mouse wheel|Scroll viewport|
+|`Ctrl+B`|Set / clear mark|`Ctrl+K`|Cut line or selection|
+|`Ctrl+P`|Copy line or selection|`Ctrl+U`|Paste clipboard|
+|`Ctrl+\`|Replace (search -> with -> Y/N/A/C)|`Ctrl+O`|Toggle case-insensitive (in search prompt)|
+|`Ctrl+R`|Toggle regex mode (in search prompt)|||
+|`Ctrl+N`|Toggle line numbers|||
+|`Ctrl+D`|Toggle mouse support|Mouse wheel|Scroll viewport|
 |Mouse click|Move cursor to click point|||
 
 ## Configuration (`~/.femtorc` or `./.femtorc`)

@@ -18,7 +18,9 @@ from femto.history import History
 from femto.config import Config
 from femto.clipboard import Clipboard, Selection
 from femto.search import SearchOptions, find_next, replace_in_line
-from femto.keys import Key, alt, is_backspace, is_enter
+from femto.keys import (
+    Key, alt, is_backspace, is_enter, ALT_BASES, CONHOST_ALT_MAP,
+)
 
 
 def _ignore_suspend():
@@ -67,7 +69,7 @@ class Application:
         self.replace_count = 0
         self._prompt_base = "Search"
 
-    # ── helpers ──────────────────────────────────────────────
+    # ── helpers ─────────────────────────────────────────────
 
     def _snapshot(self):
         self.history.push(self.buffer.lines, self.cursor.x, self.cursor.y)
@@ -78,7 +80,6 @@ class Application:
         return len(str(len(self.buffer.lines))) + 1
 
     def _set_mouse(self, on):
-        """Enable/disable terminal mouse reporting."""
         try:
             if on:
                 curses.mousemask(curses.ALL_MOUSE_EVENTS |
@@ -108,17 +109,17 @@ class Application:
         return f"{base}{self.search_options.flag_label()}: "
 
     def _maybe_toggle(self, key):
-        if key == Key.ALT_C:
+        if key == Key.CTRL_O:
             self.search_options.ignore_case = not self.search_options.ignore_case
             self.prompt.label = self._search_label(self._prompt_base)
             return True
-        if key == Key.ALT_R:
+        if key == Key.CTRL_R:
             self.search_options.regex = not self.search_options.regex
             self.prompt.label = self._search_label(self._prompt_base)
             return True
         return False
 
-    # ── clipboard ─────────────────────────────────────────────
+    # ── clipboard ────────────────────────────────────────────
 
     def _cut(self):
         self._snapshot()
@@ -164,10 +165,9 @@ class Application:
         self.cursor.x, self.cursor.y = nx, ny
         self.message = f"Pasted {len(self.clipboard.text)} chars."
 
-    # ── mouse ─────────────────────────────────────────────────
+    # ── mouse ────────────────────────────────────────────────
 
     def _handle_mouse(self, stdscr):
-        """Route pointer events; only active in NORMAL mode."""
         if self.mode != Mode.NORMAL:
             return
         try:
@@ -179,8 +179,8 @@ class Application:
         gutter = self._gutter_width()
         text_cols = max(1, screen_cols - gutter)
 
-        btn4 = getattr(curses, "BUTTON4_PRESSED", None)   # wheel up
-        btn5 = getattr(curses, "BUTTON5_PRESSED", None)   # wheel down
+        btn4 = getattr(curses, "BUTTON4_PRESSED", None)
+        btn5 = getattr(curses, "BUTTON5_PRESSED", None)
         if btn4 and (bstate & btn4):
             self._wheel(-3)
             return
@@ -189,7 +189,7 @@ class Application:
             return
 
         if bstate & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED):
-            if my >= screen_rows:          # clicked on status/help bars
+            if my >= screen_rows:
                 return
             vy = my + self.cursor.scroll_y
             vx = max(0, mx - gutter) + self.cursor.scroll_x
@@ -446,7 +446,7 @@ class Application:
             return
 
         # Clipboard
-        if key == Key.ALT_A:
+        if key == Key.CTRL_B:
             if self.selection.toggle(cur.x, cur.y):
                 self.message = "Mark set."
             else:
@@ -454,18 +454,18 @@ class Application:
             return
         if key == Key.CTRL_K:
             self._cut(); return
-        if key == Key.ALT_6:
+        if key == Key.CTRL_P:
             self._copy(); return
         if key == Key.CTRL_U:
             self._paste(); return
 
         # Toggles
-        if key == Key.ALT_N:
+        if key == Key.CTRL_N:
             self.config.show_line_numbers = not self.config.show_line_numbers
             self.message = ("Line numbers " +
                             ("on" if self.config.show_line_numbers else "off"))
             return
-        if key == Key.ALT_M:
+        if key == Key.CTRL_D:
             self.config.mouse = not self.config.mouse
             self._set_mouse(self.config.mouse)
             self.message = ("Mouse " +
@@ -532,14 +532,14 @@ class Application:
             cur.x += 1
 
     def _page(self, direction, screen_rows, screen_cols):
+        text_cols = max(1, screen_cols - self._gutter_width())
         if self.config.soft_wrap:
             _, vy = get_visual_position(
                 self.cursor.x, self.cursor.y, self.buffer.lines,
-                max(1, screen_cols - self._gutter_width()), True)
+                text_cols, True)
             target = max(0, vy + direction * screen_rows)
             y = get_logical_from_visual(target, self.buffer.lines,
-                                        max(1, screen_cols - self._gutter_width()),
-                                        True)
+                                        text_cols, True)
         else:
             y = self.cursor.y + direction * screen_rows
         self.cursor.set_pos(self.cursor.x, y,
@@ -584,22 +584,50 @@ class Application:
 
     def _read_key(self, stdscr):
         key = stdscr.getch()
-        if key == 27:                              # ESC prefix
-            stdscr.nodelay(True)
+
+        # 1) Opaque single-code Alt (legacy conhost; see --key-debug)
+        if key in CONHOST_ALT_MAP:
+            return alt(CONHOST_ALT_MAP[key])
+
+        # 2) Named Alt keys, if the curses build exposes them
+        if key > 255:
+            mapped = self._keyname_alt(key)
+            if mapped is not None:
+                return mapped
+
+        # 3) ESC-prefixed Alt (Windows Terminal, xterm, kitty, ...)
+        if key == 27:
+            # Timed wait (0.2 s): on Windows the second console event
+            # may not be posted yet when a nodelay() peek runs.
+            curses.halfdelay(2)
             try:
                 nxt = stdscr.getch()
             finally:
-                stdscr.nodelay(False)
+                curses.cbreak()
             if nxt == -1:
                 return 27
             if nxt == ord('['):
-                # Raw CSI sequence curses did not translate
-                # (legacy conhost / Windows console fallbacks)
                 return self._read_csi(stdscr)
             return alt(nxt) if 0 <= nxt <= 255 else 27
-        if 128 <= key <= 255:                      # 8-bit meta
-            return alt(key - 128)
+
+        # 4) 8-bit meta - whitelisted so cp437 glyphs can't misfire
+        if 128 <= key <= 255:
+            base = key - 128
+            if chr(base) in ALT_BASES:
+                return alt(base)
+            return key
+
         return key
+
+    def _keyname_alt(self, key):
+        """Decode PDCurses-style named Alt keys (b'ALT_x') if present."""
+        try:
+            name = curses.keyname(key)
+        except Exception:
+            return None
+        if name and name.startswith(b"ALT_") and len(name) == 5:
+            return alt(name[4])
+        return None
 
     def _read_csi(self, stdscr):
         """Parse leftover CSI sequences; returns a Key or -1 (swallowed)."""
@@ -611,19 +639,19 @@ class Application:
                 if ch == -1:
                     break
                 seq.append(ch)
-                if 0x40 <= ch <= 0x7E:             # final byte
+                if 0x40 <= ch <= 0x7E:
                     break
         finally:
             stdscr.nodelay(False)
         code = "".join(chr(c) for c in seq)
 
-        if code == "Z":                            # ESC [ Z  – Shift+Tab
+        if code == "Z":
             return Key.SHIFT_TAB
         if code.endswith("D") and (";5" in code or code == "5D"):
-            return Key.CTRL_LEFT                   # ESC [ 1 ; 5 D
+            return Key.CTRL_LEFT
         if code.endswith("C") and (";5" in code or code == "5C"):
-            return Key.CTRL_RIGHT                  # ESC [ 1 ; 5 C
-        return -1                                  # unknown: swallow
+            return Key.CTRL_RIGHT
+        return -1
 
     # ── Main loop ─────────────────────────────────────────────
 
@@ -663,7 +691,6 @@ class Application:
                 break
 
             if key == Key.RESIZE:
-                # Some terminals drop mouse reporting on resize
                 if self.config.mouse:
                     self._set_mouse(True)
                 continue

@@ -15,7 +15,7 @@ import unittest
 # so we never accidentally test a pip-installed copy.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from femto.buffer import Buffer
+from femto.buffer import Buffer, detect_newline, resolve_newline
 from femto.clipboard import Clipboard, Selection
 from femto.config import Config
 from femto.cursor import Cursor
@@ -280,6 +280,45 @@ class TestMultiBuffer(unittest.TestCase):
             with open(path + "~") as f:
                 self.assertEqual(f.read(), "one")
             self.assertFalse(os.path.exists(path + ".femto-tmp"))
+
+    def test_crlf_roundtrip_preserves_endings(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "note.txt")
+            original = "hello\r\nworld\r\n"
+            with open(path, "wb") as fh:
+                fh.write(original.encode("utf-8"))
+            cfg = Config()
+            buf = Buffer(cfg)
+            buf.load_file(path)
+            self.assertEqual(buf.lines, ["hello", "world"])
+            self.assertEqual(buf.newline, "\r\n")
+            self.assertTrue(buf.ends_with_newline)
+            buf.lines[0] = "hello!"
+            self.assertTrue(buf.save())
+            with open(path, "rb") as fh:
+                self.assertEqual(fh.read(), b"hello!\r\nworld\r\n")
+
+    def test_line_ending_config_overrides_detected(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "note.txt")
+            with open(path, "wb") as fh:
+                fh.write(b"hello\r\nworld\r\n")
+            cfg = Config()
+            cfg.line_ending = "lf"
+            buf = Buffer(cfg)
+            buf.load_file(path)
+            self.assertTrue(buf.save())
+            with open(path, "rb") as fh:
+                self.assertEqual(fh.read(), b"hello\nworld\n")
+
+    def test_detect_and_resolve_newline(self):
+        self.assertEqual(detect_newline("a\r\nb\r\n"), "\r\n")
+        self.assertEqual(detect_newline("a\nb\n"), "\n")
+        self.assertEqual(detect_newline("a\r\nb\nc\n"), "\n")
+        self.assertEqual(resolve_newline("auto", "\r\n"), "\r\n")
+        self.assertEqual(resolve_newline("lf", "\r\n"), "\n")
+        self.assertEqual(resolve_newline("crlf", "\n"), "\r\n")
+        self.assertEqual(resolve_newline("nope", "\r\n"), "\r\n")
 
     def test_revision_bumps_on_edit(self):
         d = Document(Config())

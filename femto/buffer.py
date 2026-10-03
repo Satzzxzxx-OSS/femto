@@ -11,6 +11,42 @@ import os
 
 from femto.search import SearchOptions, find_next
 
+NEWLINE_LF = "\n"
+NEWLINE_CRLF = "\r\n"
+NEWLINE_CR = "\r"
+
+
+def detect_newline(content):
+    """Return the dominant line ending in raw file text.
+
+    CRLF is counted before lone CR/LF so a Windows file is not reported
+    as LF. Empty text defaults to LF.
+    """
+    crlf = content.count(NEWLINE_CRLF)
+    lone_cr = content.count("\r") - crlf
+    lone_lf = content.count("\n") - crlf
+    if crlf >= lone_lf and crlf >= lone_cr and crlf > 0:
+        return NEWLINE_CRLF
+    if lone_cr > lone_lf and lone_cr > 0:
+        return NEWLINE_CR
+    return NEWLINE_LF
+
+
+def resolve_newline(configured, detected):
+    """Map `line_ending` config onto the ending used when saving.
+
+    `auto` (the default) keeps the ending detected at load. Explicit
+    `lf` / `crlf` / `cr` override it. Unknown values fall back to auto.
+    """
+    choice = (configured or "auto").strip().lower()
+    if choice in ("lf", "unix", "\\n"):
+        return NEWLINE_LF
+    if choice in ("crlf", "windows", "dos", "\\r\\n"):
+        return NEWLINE_CRLF
+    if choice in ("cr", "mac", "\\r"):
+        return NEWLINE_CR
+    return detected or NEWLINE_LF
+
 
 class Buffer:
     """Handles the text content as a list of lines."""
@@ -21,20 +57,30 @@ class Buffer:
         self.modified = False
         self.revision = 0          # render-cache invalidation counter
         self.config = config
+        self.newline = NEWLINE_LF
+        self.ends_with_newline = False
 
     # ── File I/O ──────────────────────────────────────────────
 
     def load_file(self, filepath):
         """Load a file into the buffer."""
         self.filename = filepath
+        self.newline = NEWLINE_LF
+        self.ends_with_newline = False
         if filepath and os.path.exists(filepath):
             try:
-                with open(filepath, 'r', encoding='utf-8') as f:
+                # newline='' disables universal-newline translation so the
+                # original CRLF/CR bytes are still visible for detection.
+                with open(filepath, 'r', encoding='utf-8', newline='') as f:
                     content = f.read()
                     spaces = " " * self.config.tab_size
-                    self.lines = content.replace('\t', spaces).splitlines()
+                    content = content.replace('\t', spaces)
+                    self.newline = detect_newline(content)
+                    self.ends_with_newline = content.endswith(("\n", "\r"))
+                    self.lines = content.splitlines()
                     if not self.lines:
                         self.lines = [""]
+                        self.ends_with_newline = False
             except Exception as e:
                 self.lines = [f"Error reading file: {e}"]
         else:
@@ -52,8 +98,13 @@ class Buffer:
             return False
         tmp = self.filename + ".femto-tmp"
         try:
-            with open(tmp, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(self.lines))
+            newline = resolve_newline(
+                getattr(self.config, 'line_ending', 'auto'), self.newline)
+            payload = newline.join(self.lines)
+            if self.lines and self.ends_with_newline:
+                payload += newline
+            with open(tmp, 'w', encoding='utf-8', newline='') as f:
+                f.write(payload)
                 f.flush()
                 os.fsync(f.fileno())
             if getattr(self.config, 'make_backup', False) \

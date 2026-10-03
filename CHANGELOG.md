@@ -2,9 +2,12 @@
 
 All notable changes to Femto are documented in this file.
 
-## [Unreleased / 0.0.3a01]
+## [0.0.3a01]
 
 - **I/O Fidelity:** Preserve CRLF/CR/LF line on save; added `line_ending` config (Thanks @HarshRajSinghania!)
+- **POSIX Compliance:** Ensure trailing newline on save (fixes #12)
+- Added `line_ending` and `final_newline` config options
+- Internal buffer normalizes to `\n` to keep cursor math and wrapping clean
 
 ## [0.0.2] - Stable
 

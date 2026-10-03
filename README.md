@@ -71,6 +71,7 @@ mouse = false
 make_backup = false
 # auto keeps the ending detected on load (LF for new files); lf or crlf forces it
 line_ending = auto
+final_newline = true  # ensure POSIX trailing newline
 ```
 
 ## Running the tests

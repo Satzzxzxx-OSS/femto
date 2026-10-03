@@ -331,5 +331,56 @@ class TestMultiBuffer(unittest.TestCase):
         self.assertEqual(get_spans("def f(): pass"),
                          get_spans("def f(): pass"))
 
+class TestIOFidelity(unittest.TestCase):
+    def test_crlf_roundtrip(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "crlf.txt")
+            with open(path, "w", newline="") as f:
+                f.write("hello\r\nworld\r\n")
+            
+            cfg = Config()
+            buf = Buffer(cfg)
+            buf.load_file(path)
+            
+            # Internal representation should be clean (no \r)
+            self.assertEqual(buf.lines, ["hello", "world"])
+            self.assertEqual(buf.line_ending, "\r\n")
+            
+            buf.insert_char(5, 0, "!")
+            buf.save()
+            
+            with open(path, "rb") as f:
+                self.assertEqual(f.read(), b"hello!\r\nworld\r\n")
+
+    def test_final_newline_added(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "nofinal.txt")
+            with open(path, "w", newline="") as f:
+                f.write("hello")
+                
+            cfg = Config()
+            cfg.final_newline = True
+            buf = Buffer(cfg)
+            buf.load_file(path)
+            buf.save()
+            
+            with open(path, "rb") as f:
+                self.assertEqual(f.read(), b"hello\n")
+
+    def test_line_ending_override(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "override.txt")
+            with open(path, "w", newline="") as f:
+                f.write("hello\r\nworld\r\n")
+                
+            cfg = Config()
+            cfg.line_ending = 'lf'
+            buf = Buffer(cfg)
+            buf.load_file(path)
+            buf.save()
+            
+            with open(path, "rb") as f:
+                self.assertEqual(f.read(), b"hello\nworld\n")
+
 if __name__ == "__main__":
     unittest.main()

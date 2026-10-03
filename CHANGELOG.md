@@ -2,6 +2,10 @@
 
 All notable changes to Femto are documented in this file.
 
+## [Unreleased / 0.0.3a01]
+
+- **I/O Fidelity:** Preserve CRLF/CR/LF line on save; added `line_ending` config (Thanks @HarshRajSinghania!)
+
 ## [0.0.2] - Stable
 
 - **Multi-buffer editing:** Open multiple files (`femto a b c`), switch with `Ctrl+F` / `Ctrl+L`.

@@ -19,8 +19,8 @@ def build_parser():
         description="Femto - a tiny nano-style terminal text editor.",
     )
     parser.add_argument(
-        "filename", nargs="?", default=None,
-        help="file to open (created on save if it does not exist)",
+        "filename", nargs="*", default=None,
+        help="file(s) to open (created on save if missing)",
     )
     parser.add_argument(
         "--version", action="version",

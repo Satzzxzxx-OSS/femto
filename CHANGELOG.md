@@ -2,7 +2,12 @@
 
 All notable changes to Femto are documented in this file.
 
-## [0.0.2a04+rebind]
+## [0.0.2rc1]
+
+- Multi-buffer: `femto a b c`, Ctrl+F / Ctrl+L switcher, [i/n] indicator, per-buffer cursor/undo/selection/match (new documents.py)
+- Exit flow saves all modified buffers, chaining Save-As prompts for unnamed ones
+- Atomic saves (temp + fsync + os.replace) with  optional `name~` backups
+- Performance: frame-signature skip, memoised wrap chunks and highlight spans; Buffer.revision invalidation
 - All Alt bindings moved to Ctrl for terminal reliability (esp, Windows): Mark Ctrl+B, Copy Ctrl+P, Case Ctrl+O, Regex Ctrl+R, Lines Ctrl+N, Mouse Ctrl+D
 - Alt decoding machinery retained for calibration but ships unbound
 - Mouse support: wheel scrolling + click-to-cursor (Alt+M / --mouse / .femtorc)

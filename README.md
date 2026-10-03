@@ -42,7 +42,14 @@ femto --version
 |`Ctrl+R`|Toggle regex mode (in search prompt)|||
 |`Ctrl+N`|Toggle line numbers|||
 |`Ctrl+D`|Toggle mouse support|Mouse wheel|Scroll viewport|
+|`Ctrl+F` / `Ctrl+L`|Next / previous buffer|||
 |Mouse click|Move cursor to click point|||
+
+```bash
+femto a.py b.py c.py  # open multiple buffers; [1/3] shown in status bar
+```
+
+`.femtorc`: `make_backup = true` keeps a `name~` backup on every save.
 
 ## Configuration (`~/.femtorc` or `./.femtorc`)
 

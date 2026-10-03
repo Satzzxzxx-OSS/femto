@@ -50,6 +50,10 @@ class Key:
     CTRL_N = 14
     CTRL_D = 4
 
+    # Buffer switching (new in 0.0.2rc1)
+    CTRL_F = 6
+    CTRL_L = 12
+
     # Clipboard
     CTRL_K = 11
     CTRL_U = 21

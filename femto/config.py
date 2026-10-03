@@ -16,6 +16,7 @@ class Config:
         self.show_line_numbers = False   
         self.syntax_highlight = True
         self.mouse = False    
+        self.make_backup = False
         self.load()
 
     def load(self):
@@ -55,5 +56,7 @@ class Config:
                             self.syntax_highlight = val.lower() in ("true", "1", "yes")
                         elif key == "mouse":
                             self.mouse = val.lower() in ("true", "1", "yes")
+                        elif key == "make_backup":
+                            self.make_backup = val.lower() in ("true", "1", "yes")
         except Exception:
             pass

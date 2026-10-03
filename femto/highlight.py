@@ -1,12 +1,12 @@
 """
 Basic Python syntax highlighter using stdlib regex and keyword modules.
-Uses a single regex with named groups to prevent overlapping matches.
+Results are memoised per line content: redraws of unchanged lines cost
+a dict lookup instead of a regex pass.
 """
 
 import re
 import keyword
 
-# Order matters: comments and strings first, then keywords/numbers
 _TOKEN_RE = re.compile(
     r'(?P<COMMENT>\#.*)|'
     r'(?P<STRING>\"\"\".*?\"\"\"|\'\'\'.*?\'\'\'|\"[^\n\"\\]*(?:\\.[^\n\"\\]*)*\"|\'[^\n\'\\]*(?:\\.[^\n\'\\]*)*\')|'
@@ -14,20 +14,31 @@ _TOKEN_RE = re.compile(
     r'(?P<NUMBER>\b\d+(?:\.\d+)?\b)'
 )
 
-# Map group names to color pair IDs (defined in renderer.py)
 _COLOR_MAP = {
-    'COMMENT': 3,   # Green
-    'STRING': 4,    # Magenta
-    'KEYWORD': 5,   # Cyan
-    'NUMBER': 6,    # Yellow
+    'COMMENT': 3,
+    'STRING': 4,
+    'KEYWORD': 5,
+    'NUMBER': 6,
 }
 
+_CACHE = {}
+_CACHE_MAX = 4096
+
+
 def get_spans(line):
-    """Returns a list of (start, end, color_pair_id) for the given line."""
+    """Return [(start, end, color_pair_id)] for a line (memoised)."""
+    hit = _CACHE.get(line)
+    if hit is not None:
+        return hit
+
     spans = []
     for m in _TOKEN_RE.finditer(line):
         for group, color_id in _COLOR_MAP.items():
             if m.group(group) is not None:
                 spans.append((m.start(), m.end(), color_id))
                 break
+
+    if len(_CACHE) >= _CACHE_MAX:
+        _CACHE.clear()
+    _CACHE[line] = spans
     return spans

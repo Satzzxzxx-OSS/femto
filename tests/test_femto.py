@@ -28,6 +28,7 @@ from femto.layout import (
     line_row_count,
 )
 from femto.search import SearchOptions, find_in_line, find_next
+from femto.documents import Document
 
 
 class TestBuffer(unittest.TestCase):
@@ -252,6 +253,44 @@ class TestMouseMapping(unittest.TestCase):
             get_logical_from_visual_point(4, 7, ["ab"], 80, soft_wrap=False),
             (7, 4))
 
+class TestMultiBuffer(unittest.TestCase):
+    def test_documents_isolated(self):
+        cfg = Config()
+        d1 = Document(cfg)
+        d2 = Document(cfg)
+        d1.buffer.insert_char(0, 0, "x")
+        d1.cursor.x = 1
+        d1.history.push(["x"], 1, 0)
+        self.assertEqual(d2.buffer.lines, [""])
+        self.assertEqual(d2.cursor.x, 0)
+        self.assertFalse(d2.history.can_undo)
+
+    def test_atomic_save_and_backup(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "out.txt")
+            cfg = Config()
+            cfg.make_backup = True
+            d = Document(cfg, path)
+            d.buffer.lines = ["one"]
+            self.assertTrue(d.buffer.save())
+            d.buffer.lines = ["two"]
+            self.assertTrue(d.buffer.save())
+            with open(path) as f:
+                self.assertEqual(f.read(), "two")
+            with open(path + "~") as f:
+                self.assertEqual(f.read(), "one")
+            self.assertFalse(os.path.exists(path + ".femto-tmp"))
+
+    def test_revision_bumps_on_edit(self):
+        d = Document(Config())
+        r0 = d.buffer.revision
+        d.buffer.insert_char(0, 0, "a")
+        self.assertEqual(d.buffer.revision, r0 + 1)
+
+    def test_highlight_cache_stable(self):
+        from femto.highlight import get_spans
+        self.assertEqual(get_spans("def f(): pass"),
+                         get_spans("def f(): pass"))
 
 if __name__ == "__main__":
     unittest.main()

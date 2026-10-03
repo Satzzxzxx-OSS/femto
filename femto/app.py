@@ -1,12 +1,13 @@
 """
 Main Application Controller for Femto.
+Multi-buffer: every per-file state lives in a Document; the Application
+keeps a list plus the shared clipboard / search options / replace flow.
 """
 
 import signal
 import curses
 
-from femto.buffer import Buffer
-from femto.cursor import Cursor
+from femto.documents import Document
 from femto.renderer import Renderer
 from femto.layout import (
     get_visual_position,
@@ -14,9 +15,8 @@ from femto.layout import (
     get_logical_from_visual_point,
 )
 from femto.prompt import Prompt
-from femto.history import History
+from femto.clipboard import Clipboard
 from femto.config import Config
-from femto.clipboard import Clipboard, Selection
 from femto.search import SearchOptions, find_next, replace_in_line
 from femto.keys import (
     Key, alt, is_backspace, is_enter, ALT_BASES, CONHOST_ALT_MAP,
@@ -45,29 +45,69 @@ class Mode:
 
 
 class Application:
-    def __init__(self, filename=None):
+    def __init__(self, filenames=None):
         self.config = Config()
-        self.buffer = Buffer(self.config)
-        self.buffer.load_file(filename)
-        self.cursor = Cursor()
+        if isinstance(filenames, str):
+            filenames = [filenames]
+        if not filenames:
+            filenames = [None]
+        self.documents = [Document(self.config, fn) for fn in filenames]
+        self.current = 0
+
         self.renderer = None
         self.message = ""
         self.running = True
         self.mode = Mode.NORMAL
         self.prompt = Prompt()
-        self.history = History()
         self.clipboard = Clipboard()
-        self.selection = Selection()
         self.search_options = SearchOptions(self.config.ignore_case,
                                             self.config.regex_search)
         self.pending_exit = False
         self.last_search = ""
-        self.last_found_pos = None
-        self.last_match = None
         self.replace_term = ""
         self.replace_with = ""
         self.replace_count = 0
         self._prompt_base = "Search"
+        self._save_target = self.doc
+        self._save_queue = []
+
+    # ── per-document shortcuts ────────────────────────────────
+
+    @property
+    def doc(self):
+        return self.documents[self.current]
+
+    @property
+    def buffer(self):
+        return self.doc.buffer
+
+    @property
+    def cursor(self):
+        return self.doc.cursor
+
+    @property
+    def history(self):
+        return self.doc.history
+
+    @property
+    def selection(self):
+        return self.doc.selection
+
+    @property
+    def last_match(self):
+        return self.doc.last_match
+
+    @last_match.setter
+    def last_match(self, value):
+        self.doc.last_match = value
+
+    @property
+    def last_found_pos(self):
+        return self.doc.last_found_pos
+
+    @last_found_pos.setter
+    def last_found_pos(self, value):
+        self.doc.last_found_pos = value
 
     # ── helpers ─────────────────────────────────────────────
 
@@ -89,6 +129,16 @@ class Application:
                 curses.mousemask(0)
         except curses.error:
             pass
+
+    def _switch_buffer(self, step):
+        if len(self.documents) < 2:
+            self.message = "Only one buffer open."
+            return
+        if self.mode == Mode.REPLACE_CONFIRM:
+            self._finish_replace(cancelled=True)
+        self.current = (self.current + step) % len(self.documents)
+        self.message = (f"Buffer {self.current + 1}/{len(self.documents)}: "
+                        f"{self.doc.filename or 'New'}")
 
     def _pre_edit(self):
         self._snapshot()
@@ -140,7 +190,7 @@ class Application:
             else:
                 self.buffer.lines[0] = ""
                 self.cursor.x = 0
-            self.buffer.modified = True
+            self.buffer.touch()
             self.message = "Cut line."
         self.selection.clear()
         self.clipboard.store(text)
@@ -223,7 +273,7 @@ class Application:
         else:
             self._handle_normal(key, screen_rows, screen_cols)
 
-    # ── prompt modes ──────────────────────────────────────────
+    # ── save / exit with multi-buffer queue ───────────────────
 
     def _handle_save_as(self, key):
         result = self.prompt.handle_key(key)
@@ -231,17 +281,66 @@ class Application:
             filename = self.prompt.text.strip()
             if not filename:
                 return
-            self.buffer.filename = filename
-            if self.buffer.save():
-                self.message = f"Saved: {filename}"
-            else:
-                self.message = "Error: could not save file."
-            self._exit_prompt_mode()
-            if self.pending_exit:
+            target = self._save_target
+            target.buffer.filename = filename
+            ok = target.buffer.save()
+            self.message = (f"Saved: {filename}" if ok
+                            else "Error: could not save file.")
+            if target in self._save_queue:
+                self._save_queue.remove(target)
+            self.prompt.deactivate()
+            exit_after = self.pending_exit
+            if ok and self._save_queue:
+                self._save_next_in_queue(exit_after)
+            elif ok and exit_after:
                 self.running = False
+            else:
+                self.mode = Mode.NORMAL
+                self.pending_exit = False
         elif result == 'cancelled':
             self._exit_prompt_mode()
+            self._save_queue = []
             self.message = "Save cancelled."
+
+    def _save_next_in_queue(self, exit_after):
+        """Save queued modified docs; prompt for unnamed ones in turn."""
+        self.pending_exit = exit_after
+        while self._save_queue:
+            d = self._save_queue[0]
+            if d.buffer.filename:
+                if d.buffer.save():
+                    self._save_queue.pop(0)
+                    continue
+                self.message = "Error: could not save file."
+                self._save_queue = []
+                self.mode = Mode.NORMAL
+                self.pending_exit = False
+                return
+            self._save_target = d
+            self.mode = Mode.SAVE_AS
+            self.prompt.start("Save As: ")
+            return
+        if exit_after:
+            self.running = False
+        else:
+            self.mode = Mode.NORMAL
+            self.pending_exit = False
+
+    def _handle_exit_confirm(self, key):
+        if key in (ord('y'), ord('Y')):
+            self._save_queue = [d for d in self.documents
+                                if d.buffer.modified]
+            if not self._save_queue:
+                self.running = False
+                return
+            self._save_next_in_queue(exit_after=True)
+        elif key in (ord('n'), ord('N')):
+            self.running = False
+        elif key in (ord('c'), ord('C'), Key.CTRL_G, Key.ESCAPE):
+            self.mode = Mode.NORMAL
+            self.message = "Exit cancelled."
+
+    # ── search / replace / goto ───────────────────────────────
 
     def _handle_search(self, key):
         if self._maybe_toggle(key):
@@ -273,8 +372,6 @@ class Application:
         else:
             self.message = f"Not found: {term}"
             self.last_match = None
-
-    # ── replace flow ──────────────────────────────────────────
 
     def _start_replace(self):
         self._prompt_base = "Replace"
@@ -337,7 +434,7 @@ class Application:
         self._snapshot()
         self.buffer.lines[my] = replace_in_line(
             self.buffer.lines[my], mx, mx + ml, self.replace_with)
-        self.buffer.modified = True
+        self.buffer.touch()
         self.replace_count += 1
         self.cursor.set_pos(mx + len(self.replace_with), my,
                             self.buffer.get_line_length, self.buffer.max_y)
@@ -369,8 +466,6 @@ class Application:
         else:
             self.message = f"Replaced {self.replace_count} occurrence(s)."
 
-    # ── goto / exit ───────────────────────────────────────────
-
     def _handle_goto_line(self, key):
         result = self.prompt.handle_key(key)
         if result == 'confirmed':
@@ -388,24 +483,6 @@ class Application:
         elif result == 'cancelled':
             self._exit_prompt_mode()
 
-    def _handle_exit_confirm(self, key):
-        if key in (ord('y'), ord('Y')):
-            if self.buffer.filename:
-                if self.buffer.save():
-                    self.running = False
-                else:
-                    self.message = "Error: could not save file."
-                    self.mode = Mode.NORMAL
-            else:
-                self.mode = Mode.SAVE_AS
-                self.prompt.start("Save As: ")
-                self.pending_exit = True
-        elif key in (ord('n'), ord('N')):
-            self.running = False
-        elif key in (ord('c'), ord('C'), Key.CTRL_G, Key.ESCAPE):
-            self.mode = Mode.NORMAL
-            self.message = "Exit cancelled."
-
     # ── NORMAL mode ───────────────────────────────────────────
 
     def _handle_normal(self, key, screen_rows, screen_cols):
@@ -416,13 +493,14 @@ class Application:
         max_y = buf.max_y
 
         if key == Key.CTRL_X:
-            if buf.modified:
+            if any(d.buffer.modified for d in self.documents):
                 self.mode = Mode.EXIT_CONFIRM
-                self.message = "Save modified buffer?"
+                self.message = "Save modified buffers?"
             else:
                 self.running = False
             return
         if key == Key.CTRL_S:
+            self._save_target = self.doc
             if buf.filename:
                 if buf.save():
                     self.message = "File saved."
@@ -432,6 +510,10 @@ class Application:
                 self.mode = Mode.SAVE_AS
                 self.prompt.start("Save As: ")
             return
+        if key == Key.CTRL_F:
+            self._switch_buffer(1); return
+        if key == Key.CTRL_L:
+            self._switch_buffer(-1); return
         if key == Key.CTRL_W:
             self._prompt_base = "Search"
             self.mode = Mode.SEARCH
@@ -553,7 +635,7 @@ class Application:
         if result:
             lines, x, y = result
             self.buffer.lines = lines
-            self.buffer.modified = True
+            self.buffer.touch()
             self.last_match = None
             self.cursor.set_pos(x, y, self.buffer.get_line_length,
                                 self.buffer.max_y)
@@ -567,7 +649,7 @@ class Application:
         if result:
             lines, x, y = result
             self.buffer.lines = lines
-            self.buffer.modified = True
+            self.buffer.touch()
             self.last_match = None
             self.cursor.set_pos(x, y, self.buffer.get_line_length,
                                 self.buffer.max_y)
@@ -580,25 +662,20 @@ class Application:
         self.mode = Mode.NORMAL
         self.pending_exit = False
 
-    # ── input reading (Alt + CSI fallbacks) ───────────────────
+    # ── input reading ─────────────────────────────────────────
 
     def _read_key(self, stdscr):
         key = stdscr.getch()
 
-        # 1) Opaque single-code Alt (legacy conhost; see --key-debug)
         if key in CONHOST_ALT_MAP:
             return alt(CONHOST_ALT_MAP[key])
 
-        # 2) Named Alt keys, if the curses build exposes them
         if key > 255:
             mapped = self._keyname_alt(key)
             if mapped is not None:
                 return mapped
 
-        # 3) ESC-prefixed Alt (Windows Terminal, xterm, kitty, ...)
         if key == 27:
-            # Timed wait (0.2 s): on Windows the second console event
-            # may not be posted yet when a nodelay() peek runs.
             curses.halfdelay(2)
             try:
                 nxt = stdscr.getch()
@@ -610,7 +687,6 @@ class Application:
                 return self._read_csi(stdscr)
             return alt(nxt) if 0 <= nxt <= 255 else 27
 
-        # 4) 8-bit meta - whitelisted so cp437 glyphs can't misfire
         if 128 <= key <= 255:
             base = key - 128
             if chr(base) in ALT_BASES:
@@ -620,7 +696,6 @@ class Application:
         return key
 
     def _keyname_alt(self, key):
-        """Decode PDCurses-style named Alt keys (b'ALT_x') if present."""
         try:
             name = curses.keyname(key)
         except Exception:
@@ -630,7 +705,6 @@ class Application:
         return None
 
     def _read_csi(self, stdscr):
-        """Parse leftover CSI sequences; returns a Key or -1 (swallowed)."""
         seq = []
         stdscr.nodelay(True)
         try:
@@ -682,6 +756,7 @@ class Application:
                 prompt=self.prompt, mode=self.mode,
                 selection=sel, mark_set=self.selection.active,
                 match=self.last_match,
+                doc_index=self.current, doc_count=len(self.documents),
             )
 
             try:

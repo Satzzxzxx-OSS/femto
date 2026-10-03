@@ -69,6 +69,8 @@ regex_search = false
 # Input & I/O
 mouse = false
 make_backup = false
+# auto keeps the ending detected on load (LF for new files); lf or crlf forces it
+line_ending = auto
 ```
 
 ## Running the tests

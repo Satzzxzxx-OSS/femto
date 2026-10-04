@@ -4,13 +4,43 @@ Text buffer management for Femto.
 I/O Fidelity (v0.0.3a01):
   * Detects dominant line ending (CRLF/CR/LF) on load.
   * Normalizes to \n internally so cursor math and wrapping stay clean.
-  * Re-applies the correct ending on save.
+  * Re-applies the correct ending on save (.femtorc can override).
   * Ensures POSIX-compliant trailing newlines.
 """
 
 import os
 
 from femto.search import SearchOptions, find_next
+
+
+# ── module-level I/O helpers (imported by the test-suite) ──────
+
+def detect_newline(content):
+    """Return the dominant line ending of raw file content.
+
+    CRLF is counted before lone CR/LF so mixed files prefer CRLF.
+    """
+    crlf = content.count('\r\n')
+    rest = content.replace('\r\n', '')
+    cr = rest.count('\r')
+    lf = rest.count('\n')
+    if crlf and crlf >= lf and crlf >= cr:
+        return '\r\n'
+    if cr > lf:
+        return '\r'
+    return '\n'
+
+
+def resolve_newline(config, detected):
+    """Apply the .femtorc `line_ending` override to a detected ending."""
+    override = getattr(config, 'line_ending', 'auto')
+    if override == 'crlf':
+        return '\r\n'
+    if override == 'cr':
+        return '\r'
+    if override == 'lf':
+        return '\n'
+    return detected
 
 
 class Buffer:
@@ -22,7 +52,7 @@ class Buffer:
         self.modified = False
         self.revision = 0
         self.config = config
-        
+
         # I/O state
         self.line_ending = '\n'
         self.had_final_newline = False
@@ -34,46 +64,31 @@ class Buffer:
         self.filename = filepath
         self.line_ending = '\n'
         self.had_final_newline = False
-        
+
         if filepath and os.path.exists(filepath):
             try:
-                # Read raw to detect line endings
                 with open(filepath, 'r', encoding='utf-8', newline='') as f:
                     content = f.read()
-                    
-                # Detect dominant line ending
-                crlf_count = content.count('\r\n')
-                temp = content.replace('\r\n', '')  # Don't double count
-                cr_count = temp.count('\r')
-                lf_count = temp.count('\n')
-                
-                if crlf_count >= lf_count and crlf_count >= cr_count and crlf_count > 0:
-                    self.line_ending = '\r\n'
-                elif cr_count > lf_count and cr_count > 0:
-                    self.line_ending = '\r'
-                else:
-                    self.line_ending = '\n'
-                    
+
+                self.line_ending = detect_newline(content)
                 self.had_final_newline = content.endswith(('\n', '\r'))
-                
-                # Normalize to \n for internal buffer (keeps cursor math clean!)
+
+                # Normalize to \n internally (keeps cursor math clean)
                 content = content.replace('\r\n', '\n').replace('\r', '\n')
-                
+
                 spaces = " " * self.config.tab_size
                 self.lines = content.replace('\t', spaces).split('\n')
-                
-                # If file ended with a newline, split() creates an extra empty string.
-                # Remove it to keep the internal representation accurate.
+
+                # A trailing newline leaves an extra empty string; drop it
                 if self.had_final_newline and self.lines and self.lines[-1] == '':
                     self.lines.pop()
-                    
                 if not self.lines:
                     self.lines = [""]
             except Exception as e:
                 self.lines = [f"Error reading file: {e}"]
         else:
             self.lines = [""]
-            
+
         self.modified = False
         self.revision = 0
 
@@ -81,30 +96,20 @@ class Buffer:
         """Atomic save with correct line endings and trailing newline."""
         if not self.filename:
             return False
-            
-        # Determine ending to use (config overrides detected)
-        ending = self.line_ending
-        cfg_ending = getattr(self.config, 'line_ending', 'auto')
-        if cfg_ending == 'crlf':
-            ending = '\r\n'
-        elif cfg_ending == 'cr':
-            ending = '\r'
-        elif cfg_ending == 'lf':
-            ending = '\n'
-            
+
+        ending = resolve_newline(self.config, self.line_ending)
         final_nl = getattr(self.config, 'final_newline', True)
-        
+
         tmp = self.filename + ".femto-tmp"
         try:
             with open(tmp, 'w', encoding='utf-8', newline='') as f:
                 text = ending.join(self.lines)
-                # Add trailing newline if configured, or if the original file had one
                 if final_nl or self.had_final_newline:
                     text += ending
                 f.write(text)
                 f.flush()
                 os.fsync(f.fileno())
-                
+
             if getattr(self.config, 'make_backup', False) \
                     and os.path.exists(self.filename):
                 os.replace(self.filename, self.filename + "~")
@@ -181,6 +186,15 @@ class Buffer:
             return max(0, x - spaces_to_remove)
         return x
 
+    # ── Auto-indent helper (v0.0.3a02) ────────────────────────
+
+    def get_leading_whitespace(self, y):
+        """Returns the leading whitespace string of line y."""
+        if 0 <= y < len(self.lines):
+            line = self.lines[y]
+            return line[:len(line) - len(line.lstrip())]
+        return ""
+
     # ── Word Navigation ───────────────────────────────────────
 
     def get_next_word_pos(self, y, x):
@@ -202,25 +216,18 @@ class Buffer:
             x -= 1
         return x + 1
 
-    # ── Search ────────────────────────────────────────────────
+    # ── Search ───────────────────────────────────────────────
 
     def find_text(self, term, start_x, start_y):
         hit = find_next(self, term, SearchOptions(), start_x, start_y)
         return (hit[0], hit[1]) if hit else None
 
-    # ── Helpers ───────────────────────────────────────────────
+    # ── Helpers ──────────────────────────────────────────────
 
     def get_line_length(self, y):
         if 0 <= y < len(self.lines):
             return len(self.lines[y])
         return 0
-
-    def get_leading_whitespace(self, y):
-        """Returns the leading whitespace string of line y."""
-        if 0 <= y < len(self.lines):
-            line = self.lines[y]
-            return line[:len(line) - len(line.lstrip())]
-        return ""
 
     @property
     def max_y(self):

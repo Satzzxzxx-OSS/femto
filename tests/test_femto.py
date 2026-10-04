@@ -1,9 +1,13 @@
 """
-Regression test-suite for Femto (stdlib unittest, no curses required).
+Regression test-suite for Femto (stdlib unittest, headless-safe).
 
 Run from the project root with either:
     python -m unittest discover -s tests -v
     python tests/test_femto.py
+
+Companion suites (separate files):
+    tests/test_layout.py   – width-aware layout cases (PR #8)
+    tests/test_help.py     – F1 help-screen cases (PR #23)
 """
 
 import os
@@ -19,16 +23,24 @@ from femto.buffer import Buffer, detect_newline, resolve_newline
 from femto.clipboard import Clipboard, Selection
 from femto.config import Config
 from femto.cursor import Cursor
+from femto.documents import Document
 from femto.history import History
-from femto.layout import col_to_index, get_logical_from_visual_point
 from femto.layout import (
     chunk_line,
+    col_to_index,
     get_logical_from_visual,
+    get_logical_from_visual_point,
     get_visual_position,
     line_row_count,
 )
 from femto.search import SearchOptions, find_in_line, find_next
-from femto.documents import Document
+
+# app-level tests need curses to be importable (not a live terminal)
+try:
+    from femto.app import Application
+    HAVE_APP = True
+except Exception:
+    HAVE_APP = False
 
 
 class TestBuffer(unittest.TestCase):
@@ -145,13 +157,25 @@ class TestConfig(unittest.TestCase):
     def test_parse(self):
         with tempfile.NamedTemporaryFile("w", suffix="rc",
                                          delete=False) as fh:
-            fh.write("# comment\ntab_size = 8\nsoft_wrap = false\n")
+            fh.write(
+                "# comment\n"
+                "tab_size = 8\n"
+                "soft_wrap = false\n"
+                "line_ending = crlf\n"
+                "final_newline = false\n"
+                "auto_indent = false\n"
+                "mouse = true\n"
+            )
             path = fh.name
         try:
             cfg = Config()
             cfg._parse(path)
             self.assertEqual(cfg.tab_size, 8)
             self.assertFalse(cfg.soft_wrap)
+            self.assertEqual(cfg.line_ending, "crlf")
+            self.assertFalse(cfg.final_newline)
+            self.assertFalse(cfg.auto_indent)
+            self.assertTrue(cfg.mouse)
         finally:
             os.unlink(path)
 
@@ -178,7 +202,7 @@ class TestSelectionClipboard(unittest.TestCase):
 
     def test_bounds_clamped_after_shrink(self):
         self.sel.toggle(10, 2)
-        self.buf.lines = ["ab"]          # buffer shrank (e.g. after undo)
+        self.buf.lines = ["ab"]
         bounds = self.sel.bounds(self.buf, 0, 0)
         self.assertEqual(bounds, ((0, 0), (2, 0)))
 
@@ -234,10 +258,9 @@ class TestMouseMapping(unittest.TestCase):
         self.assertEqual(col_to_index("hello", 99), 5)
 
     def test_col_to_index_wide(self):
-        # Each CJK char occupies 2 display columns
         self.assertEqual(col_to_index("漢字", 0), 0)
         self.assertEqual(col_to_index("漢字", 2), 1)
-        self.assertEqual(col_to_index("漢字", 3), 1)   # mid-char clamps left
+        self.assertEqual(col_to_index("漢字", 3), 1)
 
     def test_visual_point_roundtrip(self):
         lines = ["0123456789ABCDE"]
@@ -252,6 +275,7 @@ class TestMouseMapping(unittest.TestCase):
         self.assertEqual(
             get_logical_from_visual_point(4, 7, ["ab"], 80, soft_wrap=False),
             (7, 4))
+
 
 class TestMultiBuffer(unittest.TestCase):
     def test_documents_isolated(self):
@@ -276,49 +300,10 @@ class TestMultiBuffer(unittest.TestCase):
             d.buffer.lines = ["two"]
             self.assertTrue(d.buffer.save())
             with open(path) as f:
-                self.assertEqual(f.read(), "two")
+                self.assertEqual(f.read(), "two\n")
             with open(path + "~") as f:
-                self.assertEqual(f.read(), "one")
+                self.assertEqual(f.read(), "one\n")
             self.assertFalse(os.path.exists(path + ".femto-tmp"))
-
-    def test_crlf_roundtrip_preserves_endings(self):
-        with tempfile.TemporaryDirectory() as td:
-            path = os.path.join(td, "note.txt")
-            original = "hello\r\nworld\r\n"
-            with open(path, "wb") as fh:
-                fh.write(original.encode("utf-8"))
-            cfg = Config()
-            buf = Buffer(cfg)
-            buf.load_file(path)
-            self.assertEqual(buf.lines, ["hello", "world"])
-            self.assertEqual(buf.newline, "\r\n")
-            self.assertTrue(buf.ends_with_newline)
-            buf.lines[0] = "hello!"
-            self.assertTrue(buf.save())
-            with open(path, "rb") as fh:
-                self.assertEqual(fh.read(), b"hello!\r\nworld\r\n")
-
-    def test_line_ending_config_overrides_detected(self):
-        with tempfile.TemporaryDirectory() as td:
-            path = os.path.join(td, "note.txt")
-            with open(path, "wb") as fh:
-                fh.write(b"hello\r\nworld\r\n")
-            cfg = Config()
-            cfg.line_ending = "lf"
-            buf = Buffer(cfg)
-            buf.load_file(path)
-            self.assertTrue(buf.save())
-            with open(path, "rb") as fh:
-                self.assertEqual(fh.read(), b"hello\nworld\n")
-
-    def test_detect_and_resolve_newline(self):
-        self.assertEqual(detect_newline("a\r\nb\r\n"), "\r\n")
-        self.assertEqual(detect_newline("a\nb\n"), "\n")
-        self.assertEqual(detect_newline("a\r\nb\nc\n"), "\n")
-        self.assertEqual(resolve_newline("auto", "\r\n"), "\r\n")
-        self.assertEqual(resolve_newline("lf", "\r\n"), "\n")
-        self.assertEqual(resolve_newline("crlf", "\n"), "\r\n")
-        self.assertEqual(resolve_newline("nope", "\r\n"), "\r\n")
 
     def test_revision_bumps_on_edit(self):
         d = Document(Config())
@@ -331,24 +316,53 @@ class TestMultiBuffer(unittest.TestCase):
         self.assertEqual(get_spans("def f(): pass"),
                          get_spans("def f(): pass"))
 
+
+class TestNewlineHelpers(unittest.TestCase):
+    """Contributor tests from PR #13 (line-ending detection helpers)."""
+
+    def test_detect_crlf(self):
+        self.assertEqual(detect_newline("hello\r\nworld\r\n"), "\r\n")
+
+    def test_detect_lf(self):
+        self.assertEqual(detect_newline("hello\nworld\n"), "\n")
+
+    def test_detect_cr(self):
+        self.assertEqual(detect_newline("hello\rworld\r"), "\r")
+
+    def test_detect_mixed_prefers_crlf(self):
+        self.assertEqual(detect_newline("a\r\nb\nc\r\n"), "\r\n")
+
+    def test_detect_empty_defaults_lf(self):
+        self.assertEqual(detect_newline(""), "\n")
+
+    def test_resolve_override(self):
+        cfg = Config()
+        cfg.line_ending = "lf"
+        self.assertEqual(resolve_newline(cfg, "\r\n"), "\n")
+        cfg.line_ending = "crlf"
+        self.assertEqual(resolve_newline(cfg, "\n"), "\r\n")
+        cfg.line_ending = "cr"
+        self.assertEqual(resolve_newline(cfg, "\n"), "\r")
+        cfg.line_ending = "auto"
+        self.assertEqual(resolve_newline(cfg, "\r\n"), "\r\n")
+
+
 class TestIOFidelity(unittest.TestCase):
     def test_crlf_roundtrip(self):
         with tempfile.TemporaryDirectory() as td:
             path = os.path.join(td, "crlf.txt")
             with open(path, "w", newline="") as f:
                 f.write("hello\r\nworld\r\n")
-            
-            cfg = Config()
-            buf = Buffer(cfg)
+
+            buf = Buffer(Config())
             buf.load_file(path)
-            
-            # Internal representation should be clean (no \r)
+
             self.assertEqual(buf.lines, ["hello", "world"])
             self.assertEqual(buf.line_ending, "\r\n")
-            
+
             buf.insert_char(5, 0, "!")
             buf.save()
-            
+
             with open(path, "rb") as f:
                 self.assertEqual(f.read(), b"hello!\r\nworld\r\n")
 
@@ -357,71 +371,109 @@ class TestIOFidelity(unittest.TestCase):
             path = os.path.join(td, "nofinal.txt")
             with open(path, "w", newline="") as f:
                 f.write("hello")
-                
+
             cfg = Config()
             cfg.final_newline = True
             buf = Buffer(cfg)
             buf.load_file(path)
             buf.save()
-            
+
             with open(path, "rb") as f:
                 self.assertEqual(f.read(), b"hello\n")
+
+    def test_final_newline_disabled(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "nofinal2.txt")
+            with open(path, "w", newline="") as f:
+                f.write("hello")
+
+            cfg = Config()
+            cfg.final_newline = False
+            buf = Buffer(cfg)
+            buf.load_file(path)
+            buf.save()
+
+            with open(path, "rb") as f:
+                self.assertEqual(f.read(), b"hello")
 
     def test_line_ending_override(self):
         with tempfile.TemporaryDirectory() as td:
             path = os.path.join(td, "override.txt")
             with open(path, "w", newline="") as f:
                 f.write("hello\r\nworld\r\n")
-                
+
             cfg = Config()
-            cfg.line_ending = 'lf'
+            cfg.line_ending = "lf"
             buf = Buffer(cfg)
             buf.load_file(path)
             buf.save()
-            
+
             with open(path, "rb") as f:
                 self.assertEqual(f.read(), b"hello\nworld\n")
 
-class TestAutoIndent(unittest.TestCase):
-    def test_auto_indent_basic(self):
-        cfg = Config()
-        cfg.auto_indent = True
-        cfg.tab_size = 4
-        buf = Buffer(cfg)
-        buf.lines = ["    hello"]
-        
-        # Simulate Enter at end of line
-        buf.insert_newline(9, 0)
-        indent = buf.get_leading_whitespace(0)
-        buf.lines[1] = indent + buf.lines[1]
-        
-        self.assertEqual(buf.lines, ["    hello", "    "])
 
-    def test_auto_indent_python_colon(self):
-        cfg = Config()
-        cfg.auto_indent = True
-        cfg.tab_size = 4
-        buf = Buffer(cfg)
-        buf.filename = "test.py"
-        buf.lines = ["def foo():"]
-        
-        # Simulate the python colon logic
-        indent = buf.get_leading_whitespace(0)
-        prev_line_code = buf.lines[0].split('#')[0].rstrip()
-        if prev_line_code.endswith(':'):
-            indent += " " * cfg.tab_size
-            
-        self.assertEqual(indent, "    ") # 4 spaces base + 4 spaces colon = 8
+@unittest.skipUnless(HAVE_APP, "curses not importable on this machine")
+class TestAutoIndentApp(unittest.TestCase):
+    """Exercises the real Enter-key path in Application._handle_normal."""
 
-    def test_auto_indent_python_colon_with_comment(self):
-        cfg = Config()
-        cfg.tab_size = 4
-        buf = Buffer(cfg)
-        buf.filename = "test.py"
-        buf.lines = ["def foo():  # inline comment"]
-        
-        prev_line_code = buf.lines[0].split('#')[0].rstrip()
-        self.assertTrue(prev_line_code.endswith(':'))
+    ENTER = 10
+
+    def _app(self):
+        app = Application(None)
+        return app
+
+    def _press_enter(self, app):
+        app._handle_normal(self.ENTER, 24, 80)
+
+    def test_enter_copies_indent(self):
+        app = self._app()
+        app.buffer.filename = "notes.txt"
+        app.buffer.lines = ["    hello"]
+        app.cursor.set_pos(9, 0, app.buffer.get_line_length,
+                           app.buffer.max_y)
+        self._press_enter(app)
+        self.assertEqual(app.buffer.lines, ["    hello", "    "])
+        self.assertEqual(app.cursor.x, 4)
+
+    def test_enter_python_colon(self):
+        app = self._app()
+        app.buffer.filename = "x.py"
+        app.buffer.lines = ["def foo():"]
+        app.cursor.set_pos(10, 0, app.buffer.get_line_length,
+                           app.buffer.max_y)
+        self._press_enter(app)
+        self.assertEqual(app.buffer.lines, ["def foo():", "    "])
+        self.assertEqual(app.cursor.x, 4)
+
+    def test_enter_python_nested_colon(self):
+        app = self._app()
+        app.buffer.filename = "x.py"
+        app.buffer.lines = ["    def foo():"]
+        app.cursor.set_pos(14, 0, app.buffer.get_line_length,
+                           app.buffer.max_y)
+        self._press_enter(app)
+        self.assertEqual(app.buffer.lines, ["    def foo():", "        "])
+        self.assertEqual(app.cursor.x, 8)
+
+    def test_enter_ignores_inline_comment(self):
+        app = self._app()
+        app.buffer.filename = "x.py"
+        app.buffer.lines = ["def foo():  # hi"]
+        app.cursor.set_pos(16, 0, app.buffer.get_line_length,
+                           app.buffer.max_y)
+        self._press_enter(app)
+        self.assertEqual(app.buffer.lines, ["def foo():  # hi", "    "])
+
+    def test_enter_auto_indent_disabled(self):
+        app = self._app()
+        app.config.auto_indent = False
+        app.buffer.lines = ["    hello"]
+        app.cursor.set_pos(9, 0, app.buffer.get_line_length,
+                           app.buffer.max_y)
+        self._press_enter(app)
+        self.assertEqual(app.buffer.lines, ["    hello", ""])
+        self.assertEqual(app.cursor.x, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

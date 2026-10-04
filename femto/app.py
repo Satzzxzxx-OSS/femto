@@ -17,7 +17,7 @@ from femto.layout import (
 from femto.prompt import Prompt
 from femto.clipboard import Clipboard
 from femto.config import Config
-from femto.search import SearchOptions, find_next, replace_in_line
+from femto.search import SearchOptions, find_all, find_next, replace_in_line
 from femto.keys import (
     Key, alt, is_backspace, is_enter, ALT_BASES, CONHOST_ALT_MAP,
 )
@@ -355,6 +355,23 @@ class Application:
         elif result == 'cancelled':
             self._exit_prompt_mode()
 
+    def _get_search_matches(self, term):
+        cache_key = (
+            self.buffer.revision,
+            term,
+            self.search_options.ignore_case,
+            self.search_options.regex,
+        )
+
+        if self.doc.search_cache is not None:
+            key, matches = self.doc.search_cache
+            if key == cache_key:
+                return matches
+
+        matches = find_all(self.buffer, term, self.search_options)
+        self.doc.search_cache = (cache_key, matches)
+        return matches
+
     def _find_text(self, term):
         if (self.last_match and
                 self.last_match[:2] == (self.cursor.x, self.cursor.y)):
@@ -362,6 +379,7 @@ class Application:
             sy = self.cursor.y
         else:
             sx, sy = self.cursor.x, self.cursor.y
+        matches = self._get_search_matches(term)
         hit = find_next(self.buffer, term, self.search_options, sx, sy)
         if hit:
             x, y, length = hit
@@ -756,6 +774,7 @@ class Application:
                 prompt=self.prompt, mode=self.mode,
                 selection=sel, mark_set=self.selection.active,
                 match=self.last_match,
+                matches=self.doc.search_cache[1] if self.doc.search_cache else [],
                 doc_index=self.current, doc_count=len(self.documents),
             )
 

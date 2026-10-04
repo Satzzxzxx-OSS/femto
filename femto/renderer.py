@@ -21,6 +21,7 @@ class Renderer:
         self.bar_attr = curses.A_REVERSE
         self.prompt_attr = curses.A_REVERSE | curses.A_BOLD
         self.sel_attr = curses.A_REVERSE
+        self.search_match_attr = curses.A_DIM
         self.match_attr = curses.A_REVERSE | curses.A_BOLD
         self.gutter_attr = curses.A_BOLD
         self._last_sig = None
@@ -72,14 +73,14 @@ class Renderer:
     # ── Text area ─────────────────────────────────────────────
 
     def draw_text(self, buffer, cursor, screen_rows, screen_cols,
-                  sel=None, match=None):
+                  sel=None, match=None,  matches=None):
         gutter_width = (len(str(len(buffer.lines))) + 1
                         if self.config.show_line_numbers else 0)
         text_cols = max(1, screen_cols - gutter_width)
 
         if not self.config.soft_wrap:
             self._draw_text_hard(buffer, cursor, screen_rows, text_cols,
-                                 sel, match, gutter_width)
+                                 sel, match, matches, gutter_width)
             return
 
         visual_row = 0
@@ -114,7 +115,7 @@ class Renderer:
 
                 logical_x0 = sum(len(c) for c in chunks[:i])
                 self._draw_chunk(draw_y, chunk, logical_x0, y,
-                                 sel, match, highlights, gutter_width)
+                                 sel, match, matches, highlights, gutter_width)
                 visual_row += 1
 
         while visual_row - cursor.scroll_y < screen_rows:
@@ -128,7 +129,7 @@ class Renderer:
             visual_row += 1
 
     def _draw_text_hard(self, buffer, cursor, screen_rows, text_cols,
-                        sel, match, gutter_width):
+                        sel, match, matches,  gutter_width):
         for row in range(screen_rows):
             y = row + cursor.scroll_y
             self.stdscr.move(row, 0)
@@ -168,12 +169,18 @@ class Renderer:
         hi = min(chunk_len, line_end - x0)
         return (lo, hi) if lo < hi else None
 
-    def _draw_chunk(self, row, chunk, x0, y, sel, match, highlights,
+    def _draw_chunk(self, row, chunk, x0, y, sel, match, matches, highlights,
                     gutter_offset=0):
         if not chunk:
             return
 
         intervals = []
+        for mx, my, ml in matches or []:
+            if my == y:
+                lo = max(0, mx - x0)
+                hi = min(len(chunk), mx + ml - x0)
+                if lo < hi:
+                    intervals.append((lo, hi, self.search_match_attr))
         for hs, he, color_id in highlights:
             lo = max(0, hs - x0)
             hi = min(len(chunk), he - x0)
@@ -285,7 +292,7 @@ class Renderer:
     }
 
     def render(self, buffer, cursor, message="", prompt=None, mode="normal",
-               selection=None, mark_set=False, match=None,
+               selection=None, mark_set=False, match=None, matches=None,
                doc_index=0, doc_count=1):
         screen_rows, screen_cols = self.get_dimensions()
 
@@ -293,7 +300,7 @@ class Renderer:
         sig = (
             getattr(buffer, "revision", 0),
             cursor.x, cursor.y, cursor.scroll_x, cursor.scroll_y,
-            selection, match, message, mode, mark_set,
+            selection, match, matches, message, mode, mark_set,
             screen_rows, screen_cols, doc_index, doc_count,
             self.config.show_line_numbers, self.config.mouse,
             (prompt.label, prompt.text, prompt.cursor_pos)
@@ -305,7 +312,7 @@ class Renderer:
 
         self.stdscr.erase()
         self.draw_text(buffer, cursor, screen_rows, screen_cols,
-                       selection, match)
+                       selection, match, matches)
 
         if prompt and prompt.active and mode in self._PROMPT_HELP:
             self.draw_prompt(prompt, screen_rows, screen_cols,

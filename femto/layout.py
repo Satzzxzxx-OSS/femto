@@ -13,12 +13,31 @@ import unicodedata
 
 def char_width(ch):
     """Number of terminal columns used by a single character."""
+    if ch in ("\u200d", "\ufe0f"):
+        return 0
     return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
 
+def _iter_graphemes(s):
+    i = 0
+    while i < len(s):
+        start = i
+        i += 1
 
+        while i < len(s) and s[i] == "\ufe0f":
+            i += 1
+
+        while i < len(s) and s[i] == "\u200d":
+            i += 1
+            if i < len(s):
+                i += 1
+                while i < len(s) and s[i] == "\ufe0f":
+                    i += 1
+
+        yield start, i
+        
 def str_width(s):
     """Number of terminal columns a string occupies when displayed."""
-    return sum(char_width(ch) for ch in s)
+    return sum(char_width(s[start]) for start, _ in _iter_graphemes(s))
 
 
 def line_row_count(line_len, width):
@@ -41,8 +60,8 @@ def chunk_line(line, width):
     chunks = []
     start = 0
     cols = 0
-    for i, ch in enumerate(line):
-        w = char_width(ch)
+    for i, _ in _iter_graphemes(line):
+        w = char_width(line[i])
         if cols and cols + w > width:
             chunks.append(line[start:i])
             start = i
@@ -96,8 +115,8 @@ def col_to_index(line, display_col):
     start of the character.
     """
     col = 0
-    for i, ch in enumerate(line):
-        w = char_width(ch)
+    for i, _ in _iter_graphemes(line):
+        w = char_width(line[i])
         if display_col < col + w:
             return i
         col += w

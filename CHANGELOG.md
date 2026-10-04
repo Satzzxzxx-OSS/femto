@@ -2,7 +2,7 @@
 
 All notable changes to Femto are documented in this file.
 
-## [0.0.3a01]
+## [0.0.3a02]
 
 ### Added
 
@@ -18,6 +18,9 @@ All notable changes to Femto are documented in this file.
 - **Smart Auto-Indent:** Enter key copies leading whitespace (fixes #17).
 - **Python Awareness:** Automatically adds an extra indent level when the previous line ends with a colon (`:`), correctly ignoring inline `#` comments.
 - ZWJ emoji sequences and variation selection now measure correctly in soft wrap (fixes #16) - thanks @drathava847-beep!
+
+### Tests
+- Added regression test for hard-wrap behavior in `get_visual_postion()` with mutation validation (thanks @drathava847-beep!).
 
 ## [0.0.2] - Stable
 

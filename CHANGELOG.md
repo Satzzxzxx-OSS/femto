@@ -4,6 +4,10 @@ All notable changes to Femto are documented in this file.
 
 ## [0.0.3a01]
 
+### Added
+
+- Full-screen categorized F1 help screen with scrolling (fixes #20) - thanks @feliperm17!
+- AST-based test
 - **I/O Fidelity:** Preserve CRLF/CR/LF line on save; added `line_ending` config (Thanks @HarshRajSinghania!)
 - **POSIX Compliance:** Ensure trailing newline on save (fixes #12)
 - Added `line_ending` and `final_newline` config options

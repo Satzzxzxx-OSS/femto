@@ -8,6 +8,7 @@ import signal
 import curses
 
 from femto.documents import Document
+from femto.help import HelpView
 from femto.renderer import Renderer
 from femto.layout import (
     get_visual_position,
@@ -22,6 +23,8 @@ from femto.keys import (
     Key, alt, is_backspace, is_enter, ALT_BASES, CONHOST_ALT_MAP,
 )
 
+HELP_ESCAPE_DELAY_MS = 100
+
 
 def _ignore_suspend():
     sig = getattr(signal, "SIGTSTP", None)
@@ -35,6 +38,7 @@ def _ignore_suspend():
 
 class Mode:
     NORMAL = "normal"
+    HELP = "help"
     SAVE_AS = "save_as"
     SEARCH = "search"
     REPLACE_SEARCH = "replace_search"
@@ -58,6 +62,7 @@ class Application:
         self.message = ""
         self.running = True
         self.mode = Mode.NORMAL
+        self.help_scroll_y = 0
         self.prompt = Prompt()
         self.clipboard = Clipboard()
         self.search_options = SearchOptions(self.config.ignore_case,
@@ -256,6 +261,13 @@ class Application:
     # ── input routing ─────────────────────────────────────────
 
     def handle_input(self, key, screen_rows, screen_cols):
+        if self.mode == Mode.HELP:
+            self._handle_help(key, screen_rows, screen_cols)
+            return
+        if self.mode == Mode.NORMAL and key == Key.F1:
+            self.help_scroll_y = 0
+            self.mode = Mode.HELP
+            return
         if self.mode == Mode.SAVE_AS:
             self._handle_save_as(key)
         elif self.mode == Mode.SEARCH:
@@ -272,6 +284,20 @@ class Application:
             self._handle_exit_confirm(key)
         else:
             self._handle_normal(key, screen_rows, screen_cols)
+
+    def _handle_help(self, key, screen_rows, screen_cols):
+        if key in (Key.ESCAPE, ord('q')):
+            self.mode = Mode.NORMAL
+            return
+        actions = {
+            Key.ARROW_UP: "up", Key.ARROW_DOWN: "down",
+            Key.PAGE_UP: "page_up", Key.PAGE_DOWN: "page_down",
+            Key.HOME: "home", Key.END: "end",
+        }
+        if key in actions:
+            view = HelpView(self.help_scroll_y)
+            view.move(actions[key], screen_rows, screen_cols)
+            self.help_scroll_y = view.offset
 
     # ── save / exit with multi-buffer queue ───────────────────
 
@@ -665,7 +691,20 @@ class Application:
     # ── input reading ─────────────────────────────────────────
 
     def _read_key(self, stdscr):
-        key = stdscr.getch()
+        # curses can otherwise wait a full second before returning bare Esc.
+        # Keep the shorter sequence timeout local to HELP and preserve the
+        # terminal's configured delay for editing and prompts (Python 3.9+).
+        get_delay = getattr(curses, "get_escdelay", None)
+        set_delay = getattr(curses, "set_escdelay", None)
+        previous_delay = None
+        if self.mode == Mode.HELP and get_delay and set_delay:
+            previous_delay = get_delay()
+            set_delay(min(previous_delay, HELP_ESCAPE_DELAY_MS))
+        try:
+            key = stdscr.getch()
+        finally:
+            if previous_delay is not None:
+                set_delay(previous_delay)
 
         if key in CONHOST_ALT_MAP:
             return alt(CONHOST_ALT_MAP[key])
@@ -676,11 +715,17 @@ class Application:
                 return mapped
 
         if key == 27:
-            curses.halfdelay(2)
+            if self.mode == Mode.HELP:
+                stdscr.timeout(HELP_ESCAPE_DELAY_MS)
+            else:
+                curses.halfdelay(2)
             try:
                 nxt = stdscr.getch()
             finally:
-                curses.cbreak()
+                if self.mode == Mode.HELP:
+                    stdscr.timeout(-1)
+                else:
+                    curses.cbreak()
             if nxt == -1:
                 return 27
             if nxt == ord('['):
@@ -736,20 +781,25 @@ class Application:
 
         while self.running:
             screen_rows, screen_cols = self.renderer.get_dimensions()
-            text_cols = max(1, screen_cols - self._gutter_width())
-
-            vx, vy = get_visual_position(
-                self.cursor.x, self.cursor.y, self.buffer.lines,
-                text_cols, self.config.soft_wrap)
-            self.cursor.update_scroll(
-                vy, vx, screen_rows, text_cols,
-                self.config.smooth_scroll_margin, self.config.soft_wrap)
-
             sel = None
-            if self.selection.active:
-                bounds = self._current_bounds()
-                if not self.selection.is_empty(bounds):
-                    sel = bounds
+            if self.mode == Mode.HELP:
+                view = HelpView(self.help_scroll_y)
+                view.move(None, screen_rows, screen_cols)
+                self.help_scroll_y = view.offset
+            else:
+                text_cols = max(1, screen_cols - self._gutter_width())
+
+                vx, vy = get_visual_position(
+                    self.cursor.x, self.cursor.y, self.buffer.lines,
+                    text_cols, self.config.soft_wrap)
+                self.cursor.update_scroll(
+                    vy, vx, screen_rows, text_cols,
+                    self.config.smooth_scroll_margin, self.config.soft_wrap)
+
+                if self.selection.active:
+                    bounds = self._current_bounds()
+                    if not self.selection.is_empty(bounds):
+                        sel = bounds
 
             self.renderer.render(
                 self.buffer, self.cursor, message=self.message,
@@ -757,11 +807,14 @@ class Application:
                 selection=sel, mark_set=self.selection.active,
                 match=self.last_match,
                 doc_index=self.current, doc_count=len(self.documents),
+                help_scroll_y=self.help_scroll_y,
             )
 
             try:
                 key = self._read_key(stdscr)
             except KeyboardInterrupt:
+                if self.mode == Mode.HELP:
+                    continue
                 self.running = False
                 break
 

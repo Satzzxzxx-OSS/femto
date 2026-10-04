@@ -10,6 +10,7 @@ Performance model (rc1):
 import curses
 from femto import __version__, __app_name__
 from femto.layout import chunk_line, get_visual_position
+from femto.help import HelpView
 
 BAR_STYLE = "color"
 
@@ -235,7 +236,8 @@ class Renderer:
         self._draw_bar(screen_rows, status, screen_cols, self.bar_attr)
         self._draw_bar(
             screen_rows + 1,
-            "^X Exit  ^S Save  ^W Find  ^K Cut  ^U Paste  ^F/^L Buffers",
+            "F1 Help  ^X Exit  ^S Save  ^W Find  ^K Cut  ^U Paste"
+            "  ^F/^L Buffers",
             screen_cols, self.bar_attr,
         )
 
@@ -291,9 +293,51 @@ class Renderer:
         "goto_line": "Enter Jump    ^G Cancel",
     }
 
+    def _set_cursor_visible(self, visible):
+        try:
+            curses.curs_set(int(visible))
+        except curses.error:
+            pass
+
+    def draw_help_screen(self, help_scroll_y=0):
+        self._set_cursor_visible(False)
+        height, width = self.stdscr.getmaxyx()
+        rows = HelpView(help_scroll_y).render_rows(height, width)
+        for row, text in enumerate(rows):
+            attr = self.bar_attr if row in (0, height - 1) else 0
+            self._safe_addstr(row, 0, text, attr)
+
     def render(self, buffer, cursor, message="", prompt=None, mode="normal",
                selection=None, mark_set=False, match=None, matches=None,
-               doc_index=0, doc_count=1):
+               doc_index=0, doc_count=1, help_scroll_y=0):
+        if mode == "help":
+            # Erase before drawing; skip all document rendering in HELP.
+            # Invalidate the editor cache so closing help always redraws.
+            self._last_sig = None
+            self.stdscr.erase()
+            self.draw_help_screen(help_scroll_y)
+            try:
+                self.stdscr.refresh()
+            except curses.error:
+                # A resize can arrive between measuring and refreshing.
+                pass
+            return
+        self._set_cursor_visible(True)
+        height, width = self.stdscr.getmaxyx()
+        gutter = (len(str(len(buffer.lines))) + 1
+                  if self.config.show_line_numbers else 0)
+        if height < 3 or width <= gutter:
+            # Help can close before the terminal is large enough to edit.
+            self._last_sig = None
+            self.stdscr.erase()
+            if height > 0 and width > 0:
+                self._safe_addstr(0, 0, "F1 Help - resize terminal"[:width],
+                                  self.bar_attr)
+            try:
+                self.stdscr.refresh()
+            except curses.error:
+                pass
+            return
         screen_rows, screen_cols = self.get_dimensions()
 
         # ── frame signature: skip completely unchanged frames ──

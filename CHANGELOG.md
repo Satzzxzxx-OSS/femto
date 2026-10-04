@@ -2,9 +2,25 @@
 
 All notable changes to Femto are documented in this file.
 
-## [Unreleased / 0.0.3a01]
+## [0.0.3a02]
 
+### Added
+
+- Added `auto_indent` config option (default: `true`).
+- Full-screen categorized F1 help screen with scrolling (fixes #20) - thanks @feliperm17!
+- AST-based test
 - **I/O Fidelity:** Preserve CRLF/CR/LF line on save; added `line_ending` config (Thanks @HarshRajSinghania!)
+- **POSIX Compliance:** Ensure trailing newline on save (fixes #12)
+- Added `line_ending` and `final_newline` config options
+- Internal buffer normalizes to `\n` to keep cursor math and wrapping clean
+
+### Fixed
+- **Smart Auto-Indent:** Enter key copies leading whitespace (fixes #17).
+- **Python Awareness:** Automatically adds an extra indent level when the previous line ends with a colon (`:`), correctly ignoring inline `#` comments.
+- ZWJ emoji sequences and variation selection now measure correctly in soft wrap (fixes #16) - thanks @drathava847-beep!
+
+### Tests
+- Added regression test for hard-wrap behavior in `get_visual_postion()` with mutation validation (thanks @drathava847-beep!).
 
 ## [0.0.2] - Stable
 

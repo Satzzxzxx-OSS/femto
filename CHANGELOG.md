@@ -20,6 +20,7 @@ All notable changes to Femto are documented in this file.
 - ZWJ emoji sequences and variation selection now measure correctly in soft wrap (fixes #16) - thanks @drathava847-beep!
 
 ### Tests
+- All search matches highlighted on screen with revision-keyed caching (fixes #22) - thanks @drathava847-beep!
 - Added regression test for hard-wrap behavior in `get_visual_postion()` with mutation validation (thanks @drathava847-beep!).
 
 ## [0.0.2] - Stable

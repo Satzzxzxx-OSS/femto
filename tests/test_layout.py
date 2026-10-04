@@ -74,6 +74,12 @@ class TestVisualPosition(unittest.TestCase):
         lines = ["漢字漢字", "ab"]
         self.assertEqual(get_visual_position(0, 1, lines, self.WIDTH), (0, 2))
 
+    def test_hard_wrap_identity(self):
+        lines = ["hello", "world"]
+        self.assertEqual(
+            get_visual_position(5, 1, lines, 3, soft_wrap=False),
+            (5, 1),
+        )
 
 class TestLogicalFromVisual(unittest.TestCase):
     def test_ascii_regression(self):

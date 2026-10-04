@@ -9,6 +9,9 @@ All notable changes to Femto are documented in this file.
 - Added `line_ending` and `final_newline` config options
 - Internal buffer normalizes to `\n` to keep cursor math and wrapping clean
 
+### Fixed
+- ZWJ emoji sequences and variation selection now measure correctly in soft wrap (fixes #16) - thanks @drathava847-beep!
+
 ## [0.0.2] - Stable
 
 - **Multi-buffer editing:** Open multiple files (`femto a b c`), switch with `Ctrl+F` / `Ctrl+L`.

@@ -33,7 +33,8 @@ from femto.layout import (
     get_visual_position,
     line_row_count,
 )
-from femto.search import SearchOptions, find_in_line, find_next
+from femto.search import SearchOptions, find_in_line, find_next, find_all
+from femto.documents import Document
 
 # app-level tests need curses to be importable (not a live terminal)
 try:
@@ -231,7 +232,12 @@ class TestSearch(unittest.TestCase):
     def test_ignore_case(self):
         opt = SearchOptions(ignore_case=True)
         self.assertEqual(find_next(self.buf, "world", opt, 0, 0), (6, 0, 5))
-
+    def test_find_all(self):
+        opt = SearchOptions(ignore_case=True)
+        self.assertEqual(
+            find_all(self.buf, "world", opt),
+            [(6, 0, 5), (0, 1, 5)]
+        )
     def test_regex(self):
         opt = SearchOptions(regex=True)
         self.assertEqual(find_next(self.buf, r"w.rld", opt, 0, 0), (0, 1, 5))

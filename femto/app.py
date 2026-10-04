@@ -633,7 +633,23 @@ class Application:
             self._pre_edit()
             buf.insert_newline(cur.x, cur.y)
             cur.y += 1
-            cur.x = 0
+
+            # Auto-indent logic
+            if self.config.auto_indent:
+                indent = buf.get_leading_whitespace(cur.y - 1)
+
+                # Python-specific: add extra indent if previous line ends with ':'
+                # We split on '#' to ignore inline comments (e.g., `def foo(): #hi`)
+                if buf.filename and buf.filename.endswith(".py"):
+                    prev_line_code = buf.lines[cur.y - 1].split('#')[0].rstrip()
+                    if prev_line_code.endswith(':'):
+                        indent += " " * self.config.tab_size
+
+                buf.lines[cur.y] = indent + buf.lines[cur.y]
+                buf.touch()
+                cur.x = len(indent)
+            else:
+                cur.x = 0
         elif 32 <= key <= 126:
             self._pre_edit()
             buf.insert_char(cur.x, cur.y, chr(key))

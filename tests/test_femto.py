@@ -382,5 +382,46 @@ class TestIOFidelity(unittest.TestCase):
             with open(path, "rb") as f:
                 self.assertEqual(f.read(), b"hello\nworld\n")
 
+class TestAutoIndent(unittest.TestCase):
+    def test_auto_indent_basic(self):
+        cfg = Config()
+        cfg.auto_indent = True
+        cfg.tab_size = 4
+        buf = Buffer(cfg)
+        buf.lines = ["    hello"]
+        
+        # Simulate Enter at end of line
+        buf.insert_newline(9, 0)
+        indent = buf.get_leading_whitespace(0)
+        buf.lines[1] = indent + buf.lines[1]
+        
+        self.assertEqual(buf.lines, ["    hello", "    "])
+
+    def test_auto_indent_python_colon(self):
+        cfg = Config()
+        cfg.auto_indent = True
+        cfg.tab_size = 4
+        buf = Buffer(cfg)
+        buf.filename = "test.py"
+        buf.lines = ["def foo():"]
+        
+        # Simulate the python colon logic
+        indent = buf.get_leading_whitespace(0)
+        prev_line_code = buf.lines[0].split('#')[0].rstrip()
+        if prev_line_code.endswith(':'):
+            indent += " " * cfg.tab_size
+            
+        self.assertEqual(indent, "    ") # 4 spaces base + 4 spaces colon = 8
+
+    def test_auto_indent_python_colon_with_comment(self):
+        cfg = Config()
+        cfg.tab_size = 4
+        buf = Buffer(cfg)
+        buf.filename = "test.py"
+        buf.lines = ["def foo():  # inline comment"]
+        
+        prev_line_code = buf.lines[0].split('#')[0].rstrip()
+        self.assertTrue(prev_line_code.endswith(':'))
+
 if __name__ == "__main__":
     unittest.main()

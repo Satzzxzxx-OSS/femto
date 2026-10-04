@@ -164,6 +164,9 @@ syntax_highlight = true
 ignore_case = false
 regex_search = false
 
+# Editing
+auto_indent = true
+
 # Input & I/O
 mouse = false
 make_backup = false

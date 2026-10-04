@@ -215,6 +215,13 @@ class Buffer:
             return len(self.lines[y])
         return 0
 
+    def get_leading_whitespace(self, y):
+        """Returns the leading whitespace string of line y."""
+        if 0 <= y < len(self.lines):
+            line = self.lines[y]
+            return line[:len(line) - len(line.lstrip())]
+        return ""
+
     @property
     def max_y(self):
         return max(0, len(self.lines) - 1)

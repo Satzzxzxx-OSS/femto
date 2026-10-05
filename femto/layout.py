@@ -13,9 +13,11 @@ import unicodedata
 
 def char_width(ch):
     """Number of terminal columns used by a single character."""
-    if ch in ("\u200d", "\ufe0f"):
+
+    if unicodedata.combining(ch) or ch in ("\u200d", "\ufe0f"):
         return 0
     return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+
 
 def _iter_graphemes(s):
     i = 0

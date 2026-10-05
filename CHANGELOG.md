@@ -15,6 +15,7 @@ All notable changes to Femto are documented in this file.
 - Internal buffer normalizes to `\n` to keep cursor math and wrapping clean
 
 ### Fixed
+- Unicode combining characters (accents, diacritics) now correctly measure as 0 terminal columns (fixes #25) - thanks @drathava847-beep!
 - **Smart Auto-Indent:** Enter key copies leading whitespace (fixes #17).
 - **Python Awareness:** Automatically adds an extra indent level when the previous line ends with a colon (`:`), correctly ignoring inline `#` comments.
 - ZWJ emoji sequences and variation selection now measure correctly in soft wrap (fixes #16) - thanks @drathava847-beep!

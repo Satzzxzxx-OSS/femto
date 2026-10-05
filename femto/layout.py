@@ -13,6 +13,8 @@ import unicodedata
 
 def char_width(ch):
     """Number of terminal columns used by a single character."""
+    if unicodedata.combining(ch):
+        return 0
     return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
 
 

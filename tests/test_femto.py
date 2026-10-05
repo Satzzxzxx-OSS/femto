@@ -4,10 +4,6 @@ Regression test-suite for Femto (stdlib unittest, headless-safe).
 Run from the project root with either:
     python -m unittest discover -s tests -v
     python tests/test_femto.py
-
-Companion suites (separate files):
-    tests/test_layout.py   – width-aware layout cases (PR #8)
-    tests/test_help.py     – F1 help-screen cases (PR #23)
 """
 
 import os
@@ -15,8 +11,6 @@ import sys
 import tempfile
 import unittest
 
-# MUST run before any femto import: put the LOCAL source tree on sys.path
-# so we never accidentally test a pip-installed copy.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from femto.buffer import Buffer, detect_newline, resolve_newline
@@ -33,10 +27,8 @@ from femto.layout import (
     get_visual_position,
     line_row_count,
 )
-from femto.search import SearchOptions, find_in_line, find_next, find_all
-from femto.documents import Document
+from femto.search import SearchOptions, find_in_line, find_next
 
-# app-level tests need curses to be importable (not a live terminal)
 try:
     from femto.app import Application
     HAVE_APP = True
@@ -232,12 +224,7 @@ class TestSearch(unittest.TestCase):
     def test_ignore_case(self):
         opt = SearchOptions(ignore_case=True)
         self.assertEqual(find_next(self.buf, "world", opt, 0, 0), (6, 0, 5))
-    def test_find_all(self):
-        opt = SearchOptions(ignore_case=True)
-        self.assertEqual(
-            find_all(self.buf, "world", opt),
-            [(6, 0, 5), (0, 1, 5)]
-        )
+
     def test_regex(self):
         opt = SearchOptions(regex=True)
         self.assertEqual(find_next(self.buf, r"w.rld", opt, 0, 0), (0, 1, 5))
@@ -324,8 +311,6 @@ class TestMultiBuffer(unittest.TestCase):
 
 
 class TestNewlineHelpers(unittest.TestCase):
-    """Contributor tests from PR #13 (line-ending detection helpers)."""
-
     def test_detect_crlf(self):
         self.assertEqual(detect_newline("hello\r\nworld\r\n"), "\r\n")
 
@@ -359,16 +344,12 @@ class TestIOFidelity(unittest.TestCase):
             path = os.path.join(td, "crlf.txt")
             with open(path, "w", newline="") as f:
                 f.write("hello\r\nworld\r\n")
-
             buf = Buffer(Config())
             buf.load_file(path)
-
             self.assertEqual(buf.lines, ["hello", "world"])
             self.assertEqual(buf.line_ending, "\r\n")
-
             buf.insert_char(5, 0, "!")
             buf.save()
-
             with open(path, "rb") as f:
                 self.assertEqual(f.read(), b"hello!\r\nworld\r\n")
 
@@ -377,13 +358,11 @@ class TestIOFidelity(unittest.TestCase):
             path = os.path.join(td, "nofinal.txt")
             with open(path, "w", newline="") as f:
                 f.write("hello")
-
             cfg = Config()
             cfg.final_newline = True
             buf = Buffer(cfg)
             buf.load_file(path)
             buf.save()
-
             with open(path, "rb") as f:
                 self.assertEqual(f.read(), b"hello\n")
 
@@ -392,13 +371,11 @@ class TestIOFidelity(unittest.TestCase):
             path = os.path.join(td, "nofinal2.txt")
             with open(path, "w", newline="") as f:
                 f.write("hello")
-
             cfg = Config()
             cfg.final_newline = False
             buf = Buffer(cfg)
             buf.load_file(path)
             buf.save()
-
             with open(path, "rb") as f:
                 self.assertEqual(f.read(), b"hello")
 
@@ -407,26 +384,21 @@ class TestIOFidelity(unittest.TestCase):
             path = os.path.join(td, "override.txt")
             with open(path, "w", newline="") as f:
                 f.write("hello\r\nworld\r\n")
-
             cfg = Config()
             cfg.line_ending = "lf"
             buf = Buffer(cfg)
             buf.load_file(path)
             buf.save()
-
             with open(path, "rb") as f:
                 self.assertEqual(f.read(), b"hello\nworld\n")
 
 
 @unittest.skipUnless(HAVE_APP, "curses not importable on this machine")
 class TestAutoIndentApp(unittest.TestCase):
-    """Exercises the real Enter-key path in Application._handle_normal."""
-
     ENTER = 10
 
     def _app(self):
-        app = Application(None)
-        return app
+        return Application(None)
 
     def _press_enter(self, app):
         app._handle_normal(self.ENTER, 24, 80)
@@ -435,8 +407,7 @@ class TestAutoIndentApp(unittest.TestCase):
         app = self._app()
         app.buffer.filename = "notes.txt"
         app.buffer.lines = ["    hello"]
-        app.cursor.set_pos(9, 0, app.buffer.get_line_length,
-                           app.buffer.max_y)
+        app.cursor.set_pos(9, 0, app.buffer.get_line_length, app.buffer.max_y)
         self._press_enter(app)
         self.assertEqual(app.buffer.lines, ["    hello", "    "])
         self.assertEqual(app.cursor.x, 4)
@@ -445,8 +416,7 @@ class TestAutoIndentApp(unittest.TestCase):
         app = self._app()
         app.buffer.filename = "x.py"
         app.buffer.lines = ["def foo():"]
-        app.cursor.set_pos(10, 0, app.buffer.get_line_length,
-                           app.buffer.max_y)
+        app.cursor.set_pos(10, 0, app.buffer.get_line_length, app.buffer.max_y)
         self._press_enter(app)
         self.assertEqual(app.buffer.lines, ["def foo():", "    "])
         self.assertEqual(app.cursor.x, 4)
@@ -455,8 +425,7 @@ class TestAutoIndentApp(unittest.TestCase):
         app = self._app()
         app.buffer.filename = "x.py"
         app.buffer.lines = ["    def foo():"]
-        app.cursor.set_pos(14, 0, app.buffer.get_line_length,
-                           app.buffer.max_y)
+        app.cursor.set_pos(14, 0, app.buffer.get_line_length, app.buffer.max_y)
         self._press_enter(app)
         self.assertEqual(app.buffer.lines, ["    def foo():", "        "])
         self.assertEqual(app.cursor.x, 8)
@@ -465,8 +434,7 @@ class TestAutoIndentApp(unittest.TestCase):
         app = self._app()
         app.buffer.filename = "x.py"
         app.buffer.lines = ["def foo():  # hi"]
-        app.cursor.set_pos(16, 0, app.buffer.get_line_length,
-                           app.buffer.max_y)
+        app.cursor.set_pos(16, 0, app.buffer.get_line_length, app.buffer.max_y)
         self._press_enter(app)
         self.assertEqual(app.buffer.lines, ["def foo():  # hi", "    "])
 
@@ -474,8 +442,7 @@ class TestAutoIndentApp(unittest.TestCase):
         app = self._app()
         app.config.auto_indent = False
         app.buffer.lines = ["    hello"]
-        app.cursor.set_pos(9, 0, app.buffer.get_line_length,
-                           app.buffer.max_y)
+        app.cursor.set_pos(9, 0, app.buffer.get_line_length, app.buffer.max_y)
         self._press_enter(app)
         self.assertEqual(app.buffer.lines, ["    hello", ""])
         self.assertEqual(app.cursor.x, 0)

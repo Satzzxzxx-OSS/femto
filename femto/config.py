@@ -20,6 +20,7 @@ class Config:
         self.line_ending = 'auto'
         self.final_newline = True
         self.auto_indent = True
+        self.wrap_at_word = True
         self.load()
 
     def load(self):
@@ -68,5 +69,7 @@ class Config:
                             self.final_newline = val.lower() in ("true", "1", "yes")
                         elif key == "auto_indent":
                             self.auto_indent = val.lower() in ("true", "1", "yes")
+                        elif key == "wrap_at_word":
+                            self.wrap_at_word = val.lower() in ("true", "1", "yes")
         except Exception:
             pass

@@ -840,9 +840,12 @@ class Application:
                 prompt=self.prompt, mode=self.mode,
                 selection=sel, mark_set=self.selection.active,
                 match=self.last_match,
-                matches=self.doc.search_cache[1] if self.doc.search_cache else [],
-                doc_index=self.current, doc_count=len(self.documents),
-                help_scroll_y=self.help_scroll_y,
+                all_matches=getattr(self, "all_matches", None),
+                keybindings=getattr(self, "KEYBINDINGS", None)
+                if self.mode == Mode.HELP else None,
+                doc_index=self.current, 
+                doc_count=len(self.documents),
+                help_scroll_y=getattr(self, "help_scroll_y", 0),
             )
 
             try:

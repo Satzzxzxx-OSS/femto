@@ -167,6 +167,9 @@ regex_search = false
 # Editing
 auto_indent = true
 
+# Wrapping
+wrap_at_word = true
+
 # Input & I/O
 mouse = false
 make_backup = false

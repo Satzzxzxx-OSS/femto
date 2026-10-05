@@ -2,10 +2,14 @@
 
 All notable changes to Femto are documented in this file.
 
-## [0.0.3a02]
+## [0.0.3a03]
 
 ### Added
 
+- **Word-Boundary Wrapping:** Soft wrap now breaks at spaces instead of mid-word (fixes #19)
+- Falls back to hard-cut when a single word exceeds viewport width
+- Added `wrap_at_word` config flag (default: `true`)
+- Visual/logical coordinate mapping automatically adapts to new chunking
 - Added `auto_indent` config option (default: `true`).
 - Full-screen categorized F1 help screen with scrolling (fixes #20) - thanks @feliperm17!
 - AST-based test

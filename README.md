@@ -200,6 +200,16 @@ python -m build          # creates dist/femto_editor-0.0.1-*.whl
 python -m twine upload dist/* # publish to PyPI
 ```
 
+## Star History
+
+<a href="https://www.star-history.com/?repos=codewithzaqar%2Ffemto&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=codewithzaqar/femto&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=codewithzaqar/femto&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=codewithzaqar/femto&type=date&legend=top-left" />
+ </picture>
+</a>
+
 ## License
 
 MIT - see [LICENSE](LICENSE).

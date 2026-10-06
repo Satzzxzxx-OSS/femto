@@ -172,6 +172,7 @@ regex_search = false
 
 # Editing
 auto_indent = true
+system_clipboard = false
 
 # Wrapping
 wrap_at_word = true

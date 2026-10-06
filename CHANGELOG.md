@@ -19,6 +19,9 @@ All notable changes to Femto are documented in this file.
 - Internal buffer normalizes to `\n` to keep cursor math and wrapping clean
 
 ### Fixed
+- Python syntax highlighting for multi-line strings and docstrings (fixes #14) - thanks @feliperm17!
+- Highlighter now carries lexical state across lines.
+- Lazy invalidation via `buffer.revision` keeps performance optimal.
 - Unicode combining characters (accents, diacritics) now correctly measure as 0 terminal columns (fixes #25) - thanks @drathava847-beep!
 - **Smart Auto-Indent:** Enter key copies leading whitespace (fixes #17).
 - **Python Awareness:** Automatically adds an extra indent level when the previous line ends with a colon (`:`), correctly ignoring inline `#` comments.

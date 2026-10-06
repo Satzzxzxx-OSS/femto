@@ -221,6 +221,21 @@ class Application:
         self.cursor.x, self.cursor.y = nx, ny
         self.message = f"Pasted {len(self.clipboard.text)} chars."
 
+    def _copy_to_clipboard(self, text):
+        self.clipboard.store(text)
+        if self.config.system_clipboard:
+            from femto.sysclip import copy_to_system
+            copy_to_system(text)
+
+    def _paste_from_clipboard(self):
+        text = self.clipboard.text
+        if not text and self.config.system_clipboard:
+            from femto.sysclip import paste_from_system
+            text = paste_from_system()
+            if text:
+                self.clipboard.store(text)
+        return text
+
     # ── mouse ────────────────────────────────────────────────
 
     def _handle_mouse(self, stdscr):

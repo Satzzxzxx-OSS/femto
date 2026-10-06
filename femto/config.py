@@ -21,6 +21,7 @@ class Config:
         self.final_newline = True
         self.auto_indent = True
         self.wrap_at_word = True
+        self.system_clipboard = False
         self.load()
 
     def load(self):
@@ -71,5 +72,7 @@ class Config:
                             self.auto_indent = val.lower() in ("true", "1", "yes")
                         elif key == "wrap_at_word":
                             self.wrap_at_word = val.lower() in ("true", "1", "yes")
+                        elif key == "system_clipboard":
+                            self.system_clipboard = val.lower() in ("true", "1", "yes")
         except Exception:
             pass

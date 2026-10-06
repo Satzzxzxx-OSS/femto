@@ -86,7 +86,7 @@ class TestBuffer(unittest.TestCase):
             os.unlink(path)
 
 
-class TestHistory(unittest.TestCase):
+class TestHistoryMemory(unittest.TestCase):
     def test_undo_redo(self):
         h = History()
         h.push(["a"], 1, 0)
@@ -101,6 +101,15 @@ class TestHistory(unittest.TestCase):
         h.undo(["ab"], 2, 0)
         h.push(["a"], 1, 0)
         self.assertFalse(h.can_redo)
+
+    def test_interning_bounds_memory(self):
+        h = History()
+        big = ["line %d" % i for i in range(5000)]
+        for _ in range(50):
+            h.push(big, 0, 0)
+        # Identical lines intern to the same IDs: tab stays tiny
+        self.assertLess(len(h._ids), 5001)
+        self.assertEqual(len(h.undo_stack[-1][2]), 5000)
 
 
 class TestLayout(unittest.TestCase):

@@ -2,10 +2,11 @@
 
 All notable changes to Femto are documented in this file.
 
-## [0.0.3a03]
+## [0.0.3rc1]
 
 ### Added
 
+- Tab-comletion for filenames in the Save-As prompt (fixes #21)
 - **Word-Boundary Wrapping:** Soft wrap now breaks at spaces instead of mid-word (fixes #19)
 - Falls back to hard-cut when a single word exceeds viewport width
 - Added `wrap_at_word` config flag (default: `true`)

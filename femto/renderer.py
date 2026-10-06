@@ -8,8 +8,10 @@ frame-signature redraw skip, and chunk memoisation.
 """
 
 import curses
+from weakref import WeakKeyDictionary
 from femto import __version__, __app_name__
 from femto.layout import chunk_line, get_visual_position
+from femto.highlight import HighlightCache
 
 BAR_STYLE = "color"
 
@@ -27,6 +29,7 @@ class Renderer:
         self._last_sig = None
         self._chunk_cache = {}
         self._hard_cache = {}
+        self._highlight_caches = WeakKeyDictionary()
         self.setup_colors()
 
     def _load_keybindings():
@@ -119,6 +122,16 @@ class Renderer:
             return self._chunks_for(line, width)
         return self._hard_chunks_for(line, width)
 
+    def _highlights_for(self, buffer, y):
+        if (not self.config.syntax_highlight or not buffer.filename
+                or not buffer.filename.endswith('.py')):
+            return []
+        cache = self._highlight_caches.get(buffer)
+        if cache is None:
+            cache = HighlightCache()
+            self._highlight_caches[buffer] = cache
+        return cache.get_spans(buffer, y)
+
     # ── Text area ─────────────────────────────────────────────
 
     def draw_text(self, buffer, cursor, screen_rows, screen_cols,
@@ -159,11 +172,7 @@ class Renderer:
                 except curses.error:
                     pass
 
-                highlights = []
-                if (self.config.syntax_highlight and buffer.filename
-                        and buffer.filename.endswith('.py')):
-                    from femto.highlight import get_spans
-                    highlights = get_spans(line)
+                highlights = self._highlights_for(buffer, y)
 
                 logical_x0 = sum(len(c) for c in chunks[:i])
                 self._draw_chunk(draw_y, chunk, logical_x0, y,
@@ -205,11 +214,7 @@ class Renderer:
                 x0 = cursor.scroll_x
                 chunk = buffer.lines[y][x0:x0 + text_cols]
 
-                highlights = []
-                if (self.config.syntax_highlight and buffer.filename
-                        and buffer.filename.endswith('.py')):
-                    from femto.highlight import get_spans
-                    highlights = get_spans(buffer.lines[y])
+                highlights = self._highlights_for(buffer, y)
 
                 self._draw_chunk(row, chunk, x0, y, sel, match,
                                  all_matches, highlights, gutter_width)
@@ -407,6 +412,7 @@ class Renderer:
 
         # ── frame signature: skip completely unchanged frames ──
         sig = (
+            buffer, buffer.filename, id(buffer.lines),
             getattr(buffer, "revision", 0),
             cursor.x, cursor.y, cursor.scroll_x, cursor.scroll_y,
             selection, match, message, mode, mark_set,
@@ -414,6 +420,8 @@ class Renderer:
             self.config.show_line_numbers, self.config.mouse,
             (len(all_matches), all_matches[0] if all_matches else None)
             if all_matches else None,
+            self.config.syntax_highlight, self.config.soft_wrap,
+            getattr(self.config, "wrap_at_word", True),
             (prompt.label, prompt.text, prompt.cursor_pos)
             if prompt and prompt.active else None,
         )

@@ -6,6 +6,7 @@ keeps a list plus the shared clipboard / search options / replace flow.
 
 import signal
 import curses
+import os
 
 from femto.documents import Document
 from femto.help import HelpView
@@ -76,6 +77,9 @@ class Application:
         self._prompt_base = "Search"
         self._save_target = self.doc
         self._save_queue = []
+        self._save_completion_prefix = ""
+        self._save_completion_candidates = []
+        self._save_completion_index = -1
 
     # ── per-document shortcuts ────────────────────────────────
 
@@ -317,7 +321,18 @@ class Application:
 
     # ── save / exit with multi-buffer queue ───────────────────
 
+    def _reset_save_completion(self):
+        self._save_completion_prefix = ""
+        self._save_completion_candidates = []
+        self._save_completion_index = -1
+
     def _handle_save_as(self, key):
+        if key == Key.TAB:
+            self._complete_save_as()
+            return
+
+        self._reset_save_completion()
+
         result = self.prompt.handle_key(key)
         if result == 'confirmed':
             filename = self.prompt.text.strip()
@@ -344,6 +359,61 @@ class Application:
             self._save_queue = []
             self.message = "Save cancelled."
 
+    def _complete_save_as(self):
+        text = self.prompt.text
+
+        if not self._save_completion_candidates:
+            directory = os.path.dirname(text) or "."
+            prefix = os.path.basename(text)
+
+            try:
+                candidates = [
+                    name for name in os.listdir(directory)
+                    if name.startswith(prefix)
+                ]
+            except OSError:
+                candidates = []
+
+            if not candidates:
+                self.message = "No matches."
+                return
+
+            self._save_completion_prefix = text
+            self._save_completion_candidates = candidates
+            self._save_completion_index = -1
+
+            common = os.path.commonprefix(candidates)
+
+            if common != prefix:
+                path_prefix = (
+                    text[:-len(prefix)] if prefix else text
+                )
+                completed = path_prefix + common
+                self.prompt.text = completed
+                self.prompt.cursor_pos = len(completed)
+                self.message = "  ".join(candidates)
+                return
+
+        candidates = self._save_completion_candidates
+        self._save_completion_index = (
+            self._save_completion_index + 1
+        ) % len(candidates)
+
+        original = self._save_completion_prefix
+        directory = os.path.dirname(original)
+        path_prefix = (
+            original[:-len(os.path.basename(original))]
+            if os.path.basename(original)
+            else original
+        )
+
+        candidate = candidates[self._save_completion_index]
+        completed = path_prefix + candidate
+
+        self.prompt.text = completed
+        self.prompt.cursor_pos = len(completed)
+        self.message = "  ".join(candidates)
+
     def _save_next_in_queue(self, exit_after):
         """Save queued modified docs; prompt for unnamed ones in turn."""
         self.pending_exit = exit_after
@@ -360,6 +430,7 @@ class Application:
                 return
             self._save_target = d
             self.mode = Mode.SAVE_AS
+            self._reset_save_completion()
             self.prompt.start("Save As: ")
             return
         if exit_after:
@@ -568,6 +639,7 @@ class Application:
                     self.message = "Error: could not save file."
             else:
                 self.mode = Mode.SAVE_AS
+                self._reset_save_completion()
                 self.prompt.start("Save As: ")
             return
         if key == Key.CTRL_F:

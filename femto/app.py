@@ -22,6 +22,7 @@ from femto.search import SearchOptions, find_all, find_next, replace_in_line
 from femto.keys import (
     Key, alt, is_backspace, is_enter, ALT_BASES, CONHOST_ALT_MAP,
 )
+from femto.help import KEYBINDINGS
 
 HELP_ESCAPE_DELAY_MS = 100
 
@@ -841,8 +842,7 @@ class Application:
                 selection=sel, mark_set=self.selection.active,
                 match=self.last_match,
                 all_matches=getattr(self, "all_matches", None),
-                keybindings=getattr(self, "KEYBINDINGS", None)
-                if self.mode == Mode.HELP else None,
+                keybindings=KEYBINDINGS if self.mode == Mode.HELP else None,
                 doc_index=self.current, 
                 doc_count=len(self.documents),
                 help_scroll_y=getattr(self, "help_scroll_y", 0),

@@ -29,6 +29,18 @@ class Renderer:
         self._hard_cache = {}
         self.setup_colors()
 
+    def _load_keybindings():
+        """Locate the KEYBINDINGS catalog without a hard import."""
+        for modname in ("femto.help", "femto.keys", "femto.app"):
+            try:
+                mod = __import__(modname, fromlist=["KEYBINDINGS"])
+            except Exception:
+                continue
+            cat = getattr(mod, "KEYBINDINGS", None)
+            if cat:
+                return cat
+        return {"General": [("^X", "Exit"), ("^S", "Save"), ("F1", "Help")]}
+
     def setup_colors(self):
         if BAR_STYLE != "color":
             return
@@ -317,6 +329,9 @@ class Renderer:
 
         header = f" {__app_name__} Help - Esc or q returns "
         self._draw_bar(0, header, screen_cols, self.bar_attr)
+
+        if not keybindings:
+            keybindings = _load_keybindings()
 
         # Flatten catalog into (text, attr) content lines
         content = []

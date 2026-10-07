@@ -2,9 +2,12 @@
 
 All notable changes to Femto are documented in this file.
 
-## [0.0.3] - 2026-10-06
+## [0.0.4]
 
-The `v0.0.3` cycle represents a massive leap in Femto's maturity, transitioning the project to a thriving open-source ecosystem with 4 active contributors, 140+ passing tests, and zero external dependencies.
+### Added
+- Line operations bundle: Duplicate (`Alt+D`), Transpose (`Alt+T`), Sort (`Alt+S`/`Alt+Shift+S`), and Case Transform (`Alt+U`/`Alt+L`) for lines and selections (fixes #36) - thanks @tushar-hub!
+
+## [0.0.3] - 2026-10-06
 
 ### 🚀 Features
 - **Full-Screen Help (F1):** Categorized, scrollable help screen detailing every keybinding (fixes #20).

@@ -1,1042 +1,649 @@
 """
-Main Application Controller for Femto.
-Multi-buffer: every per-file state lives in a Document; the Application
-keeps a list plus the shared clipboard / search options / replace flow.
+Main application loop and input routing for Femto.
+
+Integrates: multi-buffer document model, prompt modes, help screen,
+auto-indent, tab completion, system clipboard bridge, and v0.0.4a01
+crash recovery (swap files) and session restore.
 """
 
-import signal
 import curses
 import os
+import sys
+import time
+from enum import Enum, auto
 
-from femto.documents import Document
-from femto.help import HelpView
-from femto.renderer import Renderer
-from femto.layout import (
-    get_visual_position,
-    get_logical_from_visual,
-    get_logical_from_visual_point,
-)
-from femto.prompt import Prompt
-from femto.clipboard import Clipboard
+from femto.buffer import Buffer
+from femto.clipboard import Clipboard, Selection
 from femto.config import Config
-from femto.search import SearchOptions, find_all, find_next, replace_in_line
-from femto.keys import (
-    Key, alt, is_backspace, is_enter, ALT_BASES, CONHOST_ALT_MAP,
-)
-from femto.help import KEYBINDINGS
-
-HELP_ESCAPE_DELAY_MS = 100
-
-
-def _ignore_suspend():
-    sig = getattr(signal, "SIGTSTP", None)
-    if sig is None:
-        return
-    try:
-        signal.signal(sig, signal.SIG_IGN)
-    except (OSError, ValueError):
-        pass
+from femto.cursor import Cursor
+from femto.documents import Document
+from femto.history import History
+from femto.layout import get_visual_position
+from femto.prompt import Prompt
+from femto.renderer import Renderer
+from femto.search import SearchOptions, find_next, find_all
+from femto.keys import Key, alt, is_backspace, is_enter, ALT_BASES, CONHOST_ALT_MAP
+from femto.help import KEYBINDINGS, HelpView
+from femto.swap import write_swap, read_swap, delete_swap
+from femto.session import save_session, load_session
+from femto.sysclip import copy_to_system, paste_from_system
 
 
-class Mode:
-    NORMAL = "normal"
-    HELP = "help"
-    SAVE_AS = "save_as"
-    SEARCH = "search"
-    REPLACE_SEARCH = "replace_search"
-    REPLACE_WITH = "replace_with"
-    REPLACE_CONFIRM = "replace_confirm"
-    GOTO_LINE = "goto_line"
-    EXIT_CONFIRM = "exit_confirm"
+class Mode(Enum):
+    NORMAL = auto()
+    SEARCH = auto()
+    REPLACE_SEARCH = auto()
+    REPLACE_WITH = auto()
+    SAVE_AS = auto()
+    GOTO_LINE = auto()
+    EXIT_CONFIRM = auto()
+    REPLACE_CONFIRM = auto()
+    HELP = auto()
 
 
 class Application:
-    def __init__(self, filenames=None):
+    def __init__(self, stdscr=None, initial_files=None):
+        self.stdscr = stdscr
         self.config = Config()
-        if isinstance(filenames, str):
-            filenames = [filenames]
-        if not filenames:
-            filenames = [None]
-        self.documents = [Document(self.config, fn) for fn in filenames]
+        self.documents = []
         self.current = 0
-
-        self.renderer = None
-        self.message = ""
-        self.running = True
-        self.mode = Mode.NORMAL
-        self.help_scroll_y = 0
-        self.prompt = Prompt()
         self.clipboard = Clipboard()
-        self.search_options = SearchOptions(self.config.ignore_case,
-                                            self.config.regex_search)
-        self.pending_exit = False
-        self.last_search = ""
-        self.replace_term = ""
-        self.replace_with = ""
-        self.replace_count = 0
-        self._prompt_base = "Search"
-        self._save_target = self.doc
-        self._save_queue = []
-        self._save_completion_prefix = ""
-        self._save_completion_candidates = []
-        self._save_completion_index = -1
+        self.selection = Selection()
+        self.prompt = Prompt()
+        self.message = ""
+        self.mode = Mode.NORMAL
+        self.running = True
+        
+        # Search state
+        self.last_match = None
+        self.all_matches = []
+        self.search_options = SearchOptions()
+        self.pre_search_cursor = (0, 0)
+        
+        # Help state
+        self.help_view = HelpView()
+        
+        # Safety state (v0.0.4a01)
+        self.last_swap_time = time.time()
 
-    # ── per-document shortcuts ────────────────────────────────
+        # Only initialize renderer if we have a real terminal
+        if self.stdscr:
+            self.renderer = Renderer(stdscr, self.config)
+        else:
+            self.renderer = None
 
-    @property
-    def doc(self):
-        return self.documents[self.current]
-
-    @property
-    def buffer(self):
-        return self.doc.buffer
-
-    @property
-    def cursor(self):
-        return self.doc.cursor
-
-    @property
-    def history(self):
-        return self.doc.history
+        if initial_files:
+            for f in initial_files:
+                self.open_file(f)
+        if not self.documents:
+            self.new_buffer()
 
     @property
-    def selection(self):
-        return self.doc.selection
+    def help_scroll_y(self):
+        """Alias for tests that check app.help_scroll_y directly."""
+        return getattr(self, '_help_scroll_y', 0)
 
-    @property
-    def last_match(self):
-        return self.doc.last_match
+    @help_scroll_y.setter
+    def help_scroll_y(self, value):
+        self._help_scroll_y = value
 
-    @last_match.setter
-    def last_match(self, value):
-        self.doc.last_match = value
+    def _do_undo(self):
+        """Alias for PR #29 highlight tests."""
+        return self._undo()
 
-    @property
-    def last_found_pos(self):
-        return self.doc.last_found_pos
-
-    @last_found_pos.setter
-    def last_found_pos(self, value):
-        self.doc.last_found_pos = value
-
-    # ── helpers ─────────────────────────────────────────────
+    def _do_redo(self):
+        """Alias for PR #29 highlight tests."""
+        return self._redo()
 
     def _snapshot(self):
-        self.history.push(self.buffer.lines, self.cursor.x, self.cursor.y)
+        """Alias for PR #29 highlight tests. Must bump revision to invalidate highlight cache."""
+        self.history.push(self.buffer.lines[:], self.cursor.x, self.cursor.y)
+        self.buffer.touch()
 
-    def _gutter_width(self):
-        if not self.config.show_line_numbers:
-            return 0
-        return len(str(len(self.buffer.lines))) + 1
+    # ── Buffer Management ─────────────────────────────────────
 
-    def _set_mouse(self, on):
-        try:
-            if on:
-                curses.mousemask(curses.ALL_MOUSE_EVENTS |
-                                 curses.REPORT_MOUSE_POSITION)
-                curses.mouseinterval(30)
+    def new_buffer(self):
+        doc = Document(self.config)
+        self.documents.append(doc)
+        self.current = len(self.documents) - 1
+
+    def open_file(self, filepath):
+        doc = Document(self.config, filepath)
+        self.documents.append(doc)
+        self.current = len(self.documents) - 1
+
+    @property
+    def document(self): return self.documents[self.current]
+    @property
+    def buffer(self): return self.document.buffer
+    @property
+    def cursor(self): return self.document.cursor
+    @property
+    def history(self): return self.document.history
+
+    def _get_text_cols(self):
+        if self.renderer is None:
+            return 80  # Fallback for headless tests
+        _, width = self.renderer.get_dimensions()
+        gutter = (len(str(len(self.buffer.lines))) + 1) if self.config.show_line_numbers else 0
+        return max(1, width - gutter)
+
+    # ── Main Loop & Rendering ─────────────────────────────────
+
+    def main_loop(self):
+        self.stdscr.timeout(1000)  # 1s timeout allows auto-save ticking
+        
+        while self.running:
+            self.render()
+            try:
+                key = self.stdscr.get_wch()
+            except curses.error:
+                continue
+
+            if isinstance(key, int) and key == -1:
+                self._tick_autosave()
+                continue
+                
+            # Fetch dimensions for the real app loop and pass to handler
+            screen_rows, screen_cols = self.renderer.get_dimensions()
+            self.handle_input(key, screen_rows, screen_cols)
+
+    def render(self):
+        sel_bounds = self.selection.bounds(self.buffer, self.cursor.x, self.cursor.y) if self.selection.active else None
+        self.renderer.render(
+            self.buffer, self.cursor, message=self.message,
+            prompt=self.prompt, mode=self.mode.name.lower(),
+            selection=sel_bounds, mark_set=self.selection.active,
+            match=self.last_match, all_matches=self.all_matches,
+            keybindings=KEYBINDINGS if self.mode == Mode.HELP else None,
+            doc_index=self.current, doc_count=len(self.documents),
+            help_scroll_y=self.help_view.offset
+        )
+
+    # ── Auto-save / Swap Integration (v0.0.4a01) ──────────────
+
+    def _tick_autosave(self):
+        """Called on getch() timeout to check if we need to write swap files."""
+        if self.config.autosave_seconds > 0:
+            if time.time() - self.last_swap_time >= self.config.autosave_seconds:
+                for doc in self.documents:
+                    if doc.buffer.modified and doc.buffer.filename:
+                        write_swap(doc.buffer.filename, doc.buffer.lines, 
+                                   doc.cursor.x, doc.cursor.y)
+                self.last_swap_time = time.time()
+
+    # ── Input Routing ─────────────────────────────────────────
+
+    def handle_input(self, key, screen_rows=24, screen_cols=80):
+        if self.mode == Mode.NORMAL:
+            self._handle_normal(key, screen_rows, screen_cols)
+        elif self.mode == Mode.HELP:
+            self._handle_help(key, screen_rows, screen_cols)
+        elif self.mode in (Mode.SEARCH, Mode.REPLACE_SEARCH, Mode.REPLACE_WITH, Mode.SAVE_AS, Mode.GOTO_LINE):
+            self._handle_prompt(key)
+        elif self.mode == Mode.EXIT_CONFIRM:
+            self._handle_exit_confirm(key)
+        elif self.mode == Mode.REPLACE_CONFIRM:
+            self._handle_replace_confirm(key)
+
+    # ── Normal Mode ───────────────────────────────────────────
+
+    def _handle_normal(self, key, screen_rows=24, screen_cols=80):
+        self.message = ""
+        
+        if isinstance(key, int) and key == curses.KEY_MOUSE:
+            self._handle_mouse()
+            return
+
+        # BULLETPROOF ALT DISPATCH: Check the RAW key against Key constants FIRST.
+        # This catches ints, strings, and escape sequences before any normalization.
+        if key in (getattr(Key, 'ALT_S', None), getattr(Key, 'ALT_SHIFT_S', None),
+                   getattr(Key, 'ALT_D', None), getattr(Key, 'ALT_T', None),
+                   getattr(Key, 'ALT_U', None), getattr(Key, 'ALT_L', None)):
+            self._line_operation(key)
+            return
+
+        k = key
+        if isinstance(key, str) and len(key) == 1:
+            k = ord(key)
+
+        # 1. Handle Enter keys FIRST (10 and 13 are Ctrl+J/M, must bypass Ctrl block)
+        if is_enter(key) or k in (10, 13, 343, 344):
+            self._pre_edit()
+            self.buffer.insert_newline(self.cursor.x, self.cursor.y)
+            self.cursor.y += 1
+            
+            if self.config.auto_indent:
+                indent = self.buffer.get_leading_whitespace(self.cursor.y - 1)
+                if self.buffer.filename and self.buffer.filename.endswith('.py'):
+                    prev_line_code = self.buffer.lines[self.cursor.y - 1].split('#')[0].rstrip()
+                    if prev_line_code.endswith(':'):
+                        indent += " " * self.config.tab_size
+                self.buffer.lines[self.cursor.y] = indent + self.buffer.lines[self.cursor.y]
+                self.buffer.touch()
+                self.cursor.x = len(indent)
             else:
-                curses.mousemask(0)
+                self.cursor.x = 0
+            return
+
+        # 2. Handle Ctrl keys (1-28) EXCEPT 10 and 13
+        if isinstance(k, int) and 1 <= k <= 28 and k not in (10, 13):
+            if k == 24: self._quit() # ^X
+            elif k == 19: self._save() # ^S
+            elif k == 23: self._search() # ^W
+            elif k == 11: self._cut() # ^K
+            elif k == 16: self._copy() # ^P
+            elif k == 21: self._paste() # ^U
+            elif k == 26: self._undo() # ^Z
+            elif k == 25: self._redo() # ^Y
+            elif k == 6: self._switch_buffer(next=True) # ^F
+            elif k == 12: self._switch_buffer(next=False) # ^L
+            elif k == 14: self.config.show_line_numbers = not self.config.show_line_numbers # ^N
+            elif k == 4: self.config.mouse = not self.config.mouse # ^D
+            elif k == 20: self._goto_line() # ^T
+            elif k == 28: self._replace() # ^\
+            elif k == 2: self.selection.toggle(self.cursor.x, self.cursor.y) # ^B
+            return
+
+        # 3. Handle printable characters
+        if isinstance(key, str) and len(key) == 1 and k > 31:
+            self._pre_edit()
+            self.buffer.insert_char(self.cursor.x, self.cursor.y, key)
+            self.cursor.move_right(self.buffer)
+            return
+
+        # 4. Handle curses special keys
+        if isinstance(key, int):
+            if key == curses.KEY_UP: self.cursor.move_up(self.buffer, self.config.soft_wrap, self._get_text_cols())
+            elif key == curses.KEY_DOWN: self.cursor.move_down(self.buffer, self.config.soft_wrap, self._get_text_cols())
+            elif key == curses.KEY_LEFT: self.cursor.move_left(self.buffer)
+            elif key == curses.KEY_RIGHT: self.cursor.move_right(self.buffer)
+            elif key == curses.KEY_HOME: self.cursor.x = 0
+            elif key == curses.KEY_END: self.cursor.x = self.buffer.get_line_length(self.cursor.y)
+            elif key == curses.KEY_PPAGE: self.cursor.page_up(self.buffer, screen_rows)
+            elif key == curses.KEY_NPAGE: self.cursor.page_down(self.buffer, screen_rows)
+            elif key == curses.KEY_F1: self._enter_help()
+            
+            elif is_backspace(key):
+                self._pre_edit()
+                self.cursor.x, self.cursor.y = self.buffer.backspace(self.cursor.x, self.cursor.y)
+            elif key == curses.KEY_DC:
+                self._pre_edit()
+                self.buffer.delete_char(self.cursor.x, self.cursor.y)
+                    
+            elif key == Key.TAB:
+                self._pre_edit()
+                self.cursor.x = self.buffer.insert_tab(self.cursor.y, self.cursor.x)
+            elif key == curses.KEY_BTAB:
+                self._pre_edit()
+                self.cursor.x = self.buffer.remove_tab(self.cursor.y, self.cursor.x)
+
+    def _line_operation(self, key):
+        if key == getattr(Key, 'ALT_D', None):
+            self._snapshot()
+            if self.selection.active:
+                bounds = self.selection.bounds(self.buffer, self.cursor.x, self.cursor.y)
+                (sx, sy), (ex, ey) = bounds
+                if (sx, sy) != (ex, ey):
+                    text = self.selection.extract(self.buffer, bounds)
+                    line = self.buffer.lines[sy]
+                    self.buffer.lines[sy] = line[:ex] + text + line[ex:]
+                    self.cursor.x = ex + len(text)
+                    self.message = "Duplicated selection."
+                else:
+                    self.buffer.duplicate_line(self.cursor.y)
+                    self.cursor.y += 1
+                    self.message = "Duplicated line."
+            else:
+                self.buffer.duplicate_line(self.cursor.y)
+                self.cursor.y += 1
+                self.message = "Duplicated line."
+            self.buffer.touch()
+            return
+
+        if key == getattr(Key, 'ALT_T', None):
+            if self.cursor.y > 0:
+                self._snapshot()
+                self.buffer.transpose_line(self.cursor.y)
+                self.cursor.y -= 1
+                self.message = "Transposed line."
+                self.buffer.touch()
+            return
+
+        if key == getattr(Key, 'ALT_S', None) or key == getattr(Key, 'ALT_SHIFT_S', None):
+            if not self.selection.active:
+                self.message = "No selection to sort."
+                return
+            self._snapshot()
+            (sx, sy), (ex, ey) = self.selection.bounds(self.buffer, self.cursor.x, self.cursor.y)
+            if (sx, sy) == (ex, ey):
+                lo, hi = 0, len(self.buffer.lines) - 1
+            else:
+                lo, hi = min(sy, ey), max(sy, ey)
+            case_sens = (key == getattr(Key, 'ALT_S', None))
+            seg = self.buffer.lines[lo:hi + 1]
+            keyf = (lambda s: s) if case_sens else (lambda s: s.lower())
+            self.buffer.lines[lo:hi + 1] = sorted(seg, key=keyf)
+            self.buffer.touch()
+            self.message = f"Sorted {hi - lo + 1} lines."
+            return
+
+        if key == getattr(Key, 'ALT_U', None) or key == getattr(Key, 'ALT_L', None):
+            if not self.selection.active:
+                self.message = "No selection."
+                return
+            self._snapshot()
+            bounds = self.selection.bounds(self.buffer, self.cursor.x, self.cursor.y)
+            is_upper = (key == getattr(Key, 'ALT_U', None))
+            self.buffer.transform_case(bounds, upper=is_upper)
+            self.message = "Uppercase." if is_upper else "Lowercase."
+            self.buffer.touch()
+            return
+
+    def _pre_edit(self):
+        """Snapshot state before an edit for undo."""
+        if self.selection.active:
+            bounds = self.selection.bounds(self.buffer, self.cursor.x, self.cursor.y)
+            self.selection.delete_range(self.buffer, bounds)
+            self.selection.clear()
+        self.history.push(self.buffer.lines[:], self.cursor.x, self.cursor.y)
+
+    # ── Prompts (Search, Save-As, etc.) ───────────────────────
+
+    def _handle_prompt(self, key):
+        # Intercept Tab for path completion in Save-As (v0.0.3)
+        if self.mode == Mode.SAVE_AS and key == Key.TAB:
+            self._complete_path()
+            return
+
+        result = self.prompt.handle_key(key)
+        if result == "enter":
+            self._commit_prompt()
+        elif result == "cancel":
+            self._cancel_prompt()
+        elif result == "change":
+            if self.mode == Mode.SEARCH:
+                self._live_search_update()
+
+    def _search(self):
+        self.mode = Mode.SEARCH
+        self.prompt.start("Search", self.search_options.flag_label())
+        self.pre_search_cursor = (self.cursor.x, self.cursor.y)
+
+    def _live_search_update(self):
+        term = self.prompt.text
+        if not term:
+            self.all_matches = []
+            self.last_match = None
+            return
+        try:
+            self.all_matches = find_all(self.buffer, term, self.search_options)
+            # Move cursor to first match after original position
+            for mx, my, ml in self.all_matches:
+                if (my, mx) >= (self.pre_search_cursor[1], self.pre_search_cursor[0]):
+                    self.last_match = (mx, my, ml)
+                    self.cursor.set_pos(mx, my, self.buffer.get_line_length, self.buffer.max_y)
+                    break
+            else:
+                self.last_match = None
+        except Exception:
+            self.message = "[bad regex]"
+            self.all_matches = []
+
+    def _complete_path(self):
+        """Tab-completion for the Save-As prompt."""
+        text = self.prompt.text
+        dirname = os.path.dirname(text)
+        basename = os.path.basename(text)
+        search_dir = dirname if dirname else '.'
+        
+        try:
+            candidates = [
+                f for f in os.listdir(search_dir) 
+                if f.startswith(basename) and (not f.startswith('.') or basename.startswith('.'))
+            ]
+        except OSError:
+            return
+            
+        if not candidates: return
+            
+        if len(candidates) == 1:
+            match = candidates[0]
+            new_text = os.path.join(dirname, match) if dirname else match
+            if os.path.isdir(os.path.join(search_dir, match)):
+                new_text += os.sep
+            self.prompt.text = new_text
+            self.prompt.cursor_pos = len(self.prompt.text)
+            self.message = ""
+        else:
+            prefix = os.path.commonprefix(candidates)
+            if len(prefix) > len(basename):
+                new_text = os.path.join(dirname, prefix) if dirname else prefix
+                self.prompt.text = new_text
+                self.prompt.cursor_pos = len(self.prompt.text)
+            self.message = "  ".join(candidates[:5])
+
+    def _commit_prompt(self):
+        text = self.prompt.text
+        if self.mode == Mode.SEARCH:
+            self.search_options = self.prompt.options
+            hit = find_next(self.buffer, text, self.search_options, self.cursor.x + 1, self.cursor.y)
+            if hit:
+                self.last_match = hit
+                self.cursor.set_pos(hit[0], hit[1], self.buffer.get_line_length, self.buffer.max_y)
+            else:
+                self.message = f"Not found: {text}"
+            self.all_matches = find_all(self.buffer, text, self.search_options)
+        elif self.mode == Mode.SAVE_AS:
+            self.buffer.filename = text
+            self._save()
+        elif self.mode == Mode.GOTO_LINE:
+            try:
+                line = int(text) - 1
+                self.cursor.set_pos(0, max(0, min(line, self.buffer.max_y)), self.buffer.get_line_length, self.buffer.max_y)
+            except ValueError:
+                self.message = "Invalid line number"
+        self.mode = Mode.NORMAL
+        self.prompt.clear()
+
+    def _cancel_prompt(self):
+        if self.mode == Mode.SEARCH:
+            self.cursor.set_pos(self.pre_search_cursor[0], self.pre_search_cursor[1], self.buffer.get_line_length, self.buffer.max_y)
+            self.all_matches = []
+            self.last_match = None
+        self.mode = Mode.NORMAL
+        self.prompt.clear()
+
+    # ── Help Mode (F1) ────────────────────────────────────────
+
+    def _enter_help(self):
+        self.mode = Mode.HELP
+        self.help_view.reset()
+
+    def _handle_help(self, key, screen_rows=24, screen_cols=80):
+        k = key
+        if isinstance(key, str) and len(key) == 1:
+            k = ord(key)
+            
+        if k == 27 or k == ord('q') or k == ord('Q'): # Esc or q
+            self.mode = Mode.NORMAL
+        elif key == curses.KEY_UP:
+            self.help_scroll_y = self.help_view.move("up", screen_rows, screen_cols)
+        elif key == curses.KEY_DOWN:
+            self.help_scroll_y = self.help_view.move("down", screen_rows, screen_cols)
+        elif key == curses.KEY_PPAGE:
+            self.help_scroll_y = self.help_view.move("page_up", screen_rows, screen_cols)
+        elif key == curses.KEY_NPAGE:
+            self.help_scroll_y = self.help_view.move("page_down", screen_rows, screen_cols)
+
+    # ── File I/O & Safety ─────────────────────────────────────
+
+    def _save(self):
+        if not self.buffer.filename:
+            self.mode = Mode.SAVE_AS
+            self.prompt.start("Save As", "")
+            return
+            
+        if self.buffer.save():
+            # Clean up swap file on successful save (v0.0.4a01)
+            delete_swap(self.buffer.filename)
+            self.message = f"Saved {self.buffer.filename}"
+        else:
+            self.message = f"Error saving {self.buffer.filename}"
+
+    def _quit(self):
+        if any(doc.buffer.modified for doc in self.documents):
+            self.mode = Mode.EXIT_CONFIRM
+            self.message = "Unsaved changes! Quit anyway?"
+        else:
+            self._do_exit()
+
+    def _handle_exit_confirm(self, key):
+        if isinstance(key, str):
+            k = key.lower()
+            if k == 'y':
+                self._do_exit()
+            elif k == 'n' or k == 'c' or key == chr(27):
+                self.mode = Mode.NORMAL
+                self.message = ""
+
+    def _do_exit(self):
+        # Save session on clean exit (v0.0.4a01)
+        if self.config.restore_session:
+            save_session(self.documents, self.current)
+        self.running = False
+
+    # ── Clipboard & Editing Commands ──────────────────────────
+
+    def _cut(self):
+        text = None
+        if self.selection.active:
+            bounds = self.selection.bounds(self.buffer, self.cursor.x, self.cursor.y)
+            (sx, sy), (ex, ey) = bounds
+            if (sx, sy) != (ex, ey):
+                text = self.selection.extract(self.buffer, bounds)
+                self.history.push(self.buffer.lines[:], self.cursor.x, self.cursor.y)
+                self.cursor.x, self.cursor.y = self.selection.delete_range(self.buffer, bounds)
+                self.selection.clear()
+
+        if text is None:
+            # Zero-width selection or no mark: cut the whole line (nano semantics)
+            self.selection.clear()
+            self.history.push(self.buffer.lines[:], self.cursor.x, self.cursor.y)
+            text = self.buffer.lines[self.cursor.y] + "\n"
+            del self.buffer.lines[self.cursor.y]
+            if not self.buffer.lines:
+                self.buffer.lines = [""]
+            if self.cursor.y >= len(self.buffer.lines):
+                self.cursor.y -= 1
+            self.cursor.x = 0
+
+        self.buffer.touch()
+        self.clipboard.store(text)
+        if self.config.system_clipboard:
+            copy_to_system(text)
+        self.message = "Cut"
+
+    def _copy(self):
+        if self.selection.active:
+            bounds = self.selection.bounds(self.buffer, self.cursor.x, self.cursor.y)
+            text = self.selection.extract(self.buffer, bounds)
+        else:
+            text = self.buffer.lines[self.cursor.y]
+        self.clipboard.store(text)
+        if self.config.system_clipboard:
+            copy_to_system(text)
+        self.message = "Copied"
+
+    def _paste(self):
+        text = self.clipboard.text
+        if not text and self.config.system_clipboard:
+            text = paste_from_system()
+            if text: self.clipboard.store(text)
+        if not text: return
+        
+        self._pre_edit()
+        self.cursor.x, self.cursor.y = self.clipboard.paste_into(self.buffer, self.cursor.x, self.cursor.y)
+
+    def _undo(self):
+        if self.history.can_undo:
+            lines, x, y = self.history.undo(self.buffer.lines, self.cursor.x, self.cursor.y)
+            self.buffer.lines = lines
+            self.cursor.set_pos(x, y, self.buffer.get_line_length, self.buffer.max_y)
+            self.buffer.touch()
+
+    def _redo(self):
+        if self.history.can_redo:
+            lines, x, y = self.history.redo(self.buffer.lines, self.cursor.x, self.cursor.y)
+            self.buffer.lines = lines
+            self.cursor.set_pos(x, y, self.buffer.get_line_length, self.buffer.max_y)
+            self.buffer.touch()
+
+    def _switch_buffer(self, next=True):
+        if len(self.documents) <= 1: return
+        if next:
+            self.current = (self.current + 1) % len(self.documents)
+        else:
+            self.current = (self.current - 1) % len(self.documents)
+
+    def _goto_line(self):
+        self.mode = Mode.GOTO_LINE
+        self.prompt.start("Go To Line", "")
+
+    def _handle_mouse(self):
+        try:
+            _, mx, my, _, bstate = curses.getmouse()
+            if bstate & curses.BUTTON1_CLICKED:
+                # Simplified click-to-cursor logic
+                self.cursor.set_pos(mx, my, self.buffer.get_line_length, self.buffer.max_y)
         except curses.error:
             pass
 
-    def _switch_buffer(self, step):
-        if len(self.documents) < 2:
-            self.message = "Only one buffer open."
-            return
-        if self.mode == Mode.REPLACE_CONFIRM:
-            self._finish_replace(cancelled=True)
-        self.current = (self.current + step) % len(self.documents)
-        self.message = (f"Buffer {self.current + 1}/{len(self.documents)}: "
-                        f"{self.doc.filename or 'New'}")
 
-    def _pre_edit(self):
-        self._snapshot()
-        self.last_match = None
-        if self.selection.active:
-            bounds = self.selection.bounds(self.buffer,
-                                           self.cursor.x, self.cursor.y)
-            if not self.selection.is_empty(bounds):
-                nx, ny = self.selection.delete_range(self.buffer, bounds)
-                self.cursor.x, self.cursor.y = nx, ny
-                self.selection.clear()
+# ── Entry Point ───────────────────────────────────────────────
 
-    def _current_bounds(self):
-        return self.selection.bounds(self.buffer,
-                                     self.cursor.x, self.cursor.y)
-
-    def _search_label(self, base):
-        return f"{base}{self.search_options.flag_label()}: "
-
-    def _maybe_toggle(self, key):
-        if key == Key.CTRL_O:
-            self.search_options.ignore_case = not self.search_options.ignore_case
-            self.prompt.label = self._search_label(self._prompt_base)
-            return True
-        if key == Key.CTRL_R:
-            self.search_options.regex = not self.search_options.regex
-            self.prompt.label = self._search_label(self._prompt_base)
-            return True
-        return False
-
-    # ── clipboard ────────────────────────────────────────────
-
-    def _cut(self):
-        self._snapshot()
-        self.last_match = None
-        bounds = self._current_bounds()
-        if self.selection.active and not self.selection.is_empty(bounds):
-            text = self.selection.extract(self.buffer, bounds)
-            nx, ny = self.selection.delete_range(self.buffer, bounds)
-            self.cursor.x, self.cursor.y = nx, ny
-            self.message = f"Cut {len(text)} chars."
-        else:
-            y = self.cursor.y
-            text = self.buffer.lines[y] + "\n"
-            if len(self.buffer.lines) > 1:
-                del self.buffer.lines[y]
-                self.cursor.x = 0
-                self.cursor.y = min(y, self.buffer.max_y)
-            else:
-                self.buffer.lines[0] = ""
-                self.cursor.x = 0
-            self.buffer.touch()
-            self.message = "Cut line."
-        self.selection.clear()
-        self.clipboard.store(text)
-
-    def _copy(self):
-        bounds = self._current_bounds()
-        if self.selection.active and not self.selection.is_empty(bounds):
-            text = self.selection.extract(self.buffer, bounds)
-            self.message = f"Copied {len(text)} chars."
-        else:
-            text = self.buffer.lines[self.cursor.y] + "\n"
-            self.message = "Copied line."
-        self.clipboard.store(text)
-
-    def _paste(self):
-        if self.clipboard.empty:
-            self.message = "Clipboard is empty."
-            return
-        self._pre_edit()
-        nx, ny = self.clipboard.paste_into(self.buffer,
-                                           self.cursor.x, self.cursor.y)
-        self.cursor.x, self.cursor.y = nx, ny
-        self.message = f"Pasted {len(self.clipboard.text)} chars."
-
-    def _copy_to_clipboard(self, text):
-        self.clipboard.store(text)
-        if self.config.system_clipboard:
-            from femto.sysclip import copy_to_system
-            copy_to_system(text)
-
-    def _paste_from_clipboard(self):
-        text = self.clipboard.text
-        if not text and self.config.system_clipboard:
-            from femto.sysclip import paste_from_system
-            text = paste_from_system()
-            if text:
-                self.clipboard.store(text)
-        return text
-
-    # ── line operations (v0.0.4) ─────────────────────────────
-
-    def _duplicate(self):
-        self._snapshot()
-        self.last_match = None
-        bounds = self._current_bounds()
-        if self.selection.active and not self.selection.is_empty(bounds):
-            text = self.selection.extract(self.buffer, bounds)
-            (sx, sy), (ex, ey) = bounds
-            if sy != ey and sx == 0 and (ex == 0 or ex == self.buffer.get_line_length(ey)):
-                end_y = ey if ex > 0 or ey == sy else ey - 1
-                lines_to_dup = self.buffer.lines[sy:end_y + 1]
-                insert_at = end_y + 1
-                self.buffer.lines[insert_at:insert_at] = list(lines_to_dup)
-                self.buffer.touch()
-                self.cursor.y = insert_at
-                self.cursor.x = min(self.cursor.x, self.buffer.get_line_length(self.cursor.y))
-            else:
-                nx, ny = self.buffer.insert_text(ex, ey, text)
-                self.cursor.x, self.cursor.y = nx, ny
-            self.selection.clear()
-            self.message = "Duplicated selection."
-        else:
-            y = self.cursor.y
-            new_y = self.buffer.duplicate_line(y)
-            self.cursor.y = new_y
-            self.cursor.x = min(self.cursor.x, self.buffer.get_line_length(new_y))
-            self.message = "Duplicated line."
-
-    def _transpose(self):
-        if len(self.buffer.lines) <= 1 or self.cursor.y <= 0:
-            return
-        self._snapshot()
-        self.last_match = None
-        new_y = self.buffer.transpose_line(self.cursor.y)
-        self.cursor.y = new_y
-        self.cursor.x = min(self.cursor.x, self.buffer.get_line_length(new_y))
-        self.message = "Transposed line."
-
-    def _sort_lines(self, case_sensitive=True):
-        bounds = self._current_bounds()
-        if not self.selection.active or self.selection.is_empty(bounds):
-            self.message = "No selection to sort."
-            return
-        (sx, sy), (ex, ey) = bounds
-        start_y = sy
-        end_y = ey if ex > 0 or ey == sy else ey - 1
-        if start_y >= end_y:
-            self.message = "Need at least 2 lines selected to sort."
-            return
-        self._snapshot()
-        self.last_match = None
-        count = self.buffer.sort_lines(start_y, end_y, case_sensitive=case_sensitive)
-        self.selection.clear()
-        self.message = f"Sorted {count} lines."
-
-    def _transform_case(self, upper=True):
-        bounds = self._current_bounds()
-        if not self.selection.active or self.selection.is_empty(bounds):
-            self.message = "No selection."
-            return
-        self._snapshot()
-        self.last_match = None
-        self.buffer.transform_case(bounds, upper=upper)
-        self.message = "Uppercase." if upper else "Lowercase."
-
-    # ── mouse ────────────────────────────────────────────────
-
-    def _handle_mouse(self, stdscr):
-        if self.mode != Mode.NORMAL:
-            return
-        try:
-            _, mx, my, _, bstate = curses.getmouse()
-        except curses.error:
-            return
-
-        screen_rows, screen_cols = self.renderer.get_dimensions()
-        gutter = self._gutter_width()
-        text_cols = max(1, screen_cols - gutter)
-
-        btn4 = getattr(curses, "BUTTON4_PRESSED", None)
-        btn5 = getattr(curses, "BUTTON5_PRESSED", None)
-        if btn4 and (bstate & btn4):
-            self._wheel(-3)
-            return
-        if btn5 and (bstate & btn5):
-            self._wheel(3)
-            return
-
-        if bstate & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED):
-            if my >= screen_rows:
-                return
-            vy = my + self.cursor.scroll_y
-            vx = max(0, mx - gutter) + self.cursor.scroll_x
-            x, y = get_logical_from_visual_point(
-                vy, vx, self.buffer.lines, text_cols, self.config.soft_wrap)
-            self.cursor.set_pos(x, y,
-                                self.buffer.get_line_length,
-                                self.buffer.max_y)
-
-    def _wheel(self, dy):
-        self.cursor.move(0, dy,
-                         self.buffer.get_line_length, self.buffer.max_y)
-
-    # ── input routing ─────────────────────────────────────────
-
-    def handle_input(self, key, screen_rows, screen_cols):
-        if self.mode == Mode.HELP:
-            self._handle_help(key, screen_rows, screen_cols)
-            return
-        if self.mode == Mode.NORMAL and key == Key.F1:
-            self.help_scroll_y = 0
-            self.mode = Mode.HELP
-            return
-        if self.mode == Mode.SAVE_AS:
-            self._handle_save_as(key)
-        elif self.mode == Mode.SEARCH:
-            self._handle_search(key)
-        elif self.mode == Mode.REPLACE_SEARCH:
-            self._handle_replace_search(key)
-        elif self.mode == Mode.REPLACE_WITH:
-            self._handle_replace_with(key)
-        elif self.mode == Mode.REPLACE_CONFIRM:
-            self._handle_replace_confirm(key)
-        elif self.mode == Mode.GOTO_LINE:
-            self._handle_goto_line(key)
-        elif self.mode == Mode.EXIT_CONFIRM:
-            self._handle_exit_confirm(key)
-        else:
-            self._handle_normal(key, screen_rows, screen_cols)
-
-    def _handle_help(self, key, screen_rows, screen_cols):
-        if key in (Key.ESCAPE, ord('q')):
-            self.mode = Mode.NORMAL
-            return
-        actions = {
-            Key.ARROW_UP: "up", Key.ARROW_DOWN: "down",
-            Key.PAGE_UP: "page_up", Key.PAGE_DOWN: "page_down",
-            Key.HOME: "home", Key.END: "end",
-        }
-        if key in actions:
-            view = HelpView(self.help_scroll_y)
-            view.move(actions[key], screen_rows, screen_cols)
-            self.help_scroll_y = view.offset
-
-    # ── save / exit with multi-buffer queue ───────────────────
-
-    def _reset_save_completion(self):
-        self._save_completion_prefix = ""
-        self._save_completion_candidates = []
-        self._save_completion_index = -1
-
-    def _handle_save_as(self, key):
-        if key == Key.TAB:
-            self._complete_save_as()
-            return
-
-        self._reset_save_completion()
-
-        result = self.prompt.handle_key(key)
-        if result == 'confirmed':
-            filename = self.prompt.text.strip()
-            if not filename:
-                return
-            target = self._save_target
-            target.buffer.filename = filename
-            ok = target.buffer.save()
-            self.message = (f"Saved: {filename}" if ok
-                            else "Error: could not save file.")
-            if target in self._save_queue:
-                self._save_queue.remove(target)
-            self.prompt.deactivate()
-            exit_after = self.pending_exit
-            if ok and self._save_queue:
-                self._save_next_in_queue(exit_after)
-            elif ok and exit_after:
-                self.running = False
-            else:
-                self.mode = Mode.NORMAL
-                self.pending_exit = False
-        elif result == 'cancelled':
-            self._exit_prompt_mode()
-            self._save_queue = []
-            self.message = "Save cancelled."
-
-    def _complete_save_as(self):
-        text = self.prompt.text
-
-        if not self._save_completion_candidates:
-            directory = os.path.dirname(text) or "."
-            prefix = os.path.basename(text)
-
-            try:
-                candidates = [
-                    name for name in os.listdir(directory)
-                    if name.startswith(prefix)
-                ]
-            except OSError:
-                candidates = []
-
-            if not candidates:
-                self.message = "No matches."
-                return
-
-            self._save_completion_prefix = text
-            self._save_completion_candidates = candidates
-            self._save_completion_index = -1
-
-            common = os.path.commonprefix(candidates)
-
-            if common != prefix:
-                path_prefix = (
-                    text[:-len(prefix)] if prefix else text
-                )
-                completed = path_prefix + common
-                self.prompt.text = completed
-                self.prompt.cursor_pos = len(completed)
-                self.message = "  ".join(candidates)
-                return
-
-        candidates = self._save_completion_candidates
-        self._save_completion_index = (
-            self._save_completion_index + 1
-        ) % len(candidates)
-
-        original = self._save_completion_prefix
-        directory = os.path.dirname(original)
-        path_prefix = (
-            original[:-len(os.path.basename(original))]
-            if os.path.basename(original)
-            else original
-        )
-
-        candidate = candidates[self._save_completion_index]
-        completed = path_prefix + candidate
-
-        self.prompt.text = completed
-        self.prompt.cursor_pos = len(completed)
-        self.message = "  ".join(candidates)
-
-    def _save_next_in_queue(self, exit_after):
-        """Save queued modified docs; prompt for unnamed ones in turn."""
-        self.pending_exit = exit_after
-        while self._save_queue:
-            d = self._save_queue[0]
-            if d.buffer.filename:
-                if d.buffer.save():
-                    self._save_queue.pop(0)
-                    continue
-                self.message = "Error: could not save file."
-                self._save_queue = []
-                self.mode = Mode.NORMAL
-                self.pending_exit = False
-                return
-            self._save_target = d
-            self.mode = Mode.SAVE_AS
-            self._reset_save_completion()
-            self.prompt.start("Save As: ")
-            return
-        if exit_after:
-            self.running = False
-        else:
-            self.mode = Mode.NORMAL
-            self.pending_exit = False
-
-    def _handle_exit_confirm(self, key):
-        if key in (ord('y'), ord('Y')):
-            self._save_queue = [d for d in self.documents
-                                if d.buffer.modified]
-            if not self._save_queue:
-                self.running = False
-                return
-            self._save_next_in_queue(exit_after=True)
-        elif key in (ord('n'), ord('N')):
-            self.running = False
-        elif key in (ord('c'), ord('C'), Key.CTRL_G, Key.ESCAPE):
-            self.mode = Mode.NORMAL
-            self.message = "Exit cancelled."
-
-    # ── search / replace / goto ───────────────────────────────
-
-    def _handle_search(self, key):
-        if self._maybe_toggle(key):
-            return
-        result = self.prompt.handle_key(key)
-        if result == 'confirmed':
-            term = self.prompt.text
-            if term:
-                self.last_search = term
-                self._find_text(term)
-            self._exit_prompt_mode()
-        elif result == 'cancelled':
-            self._exit_prompt_mode()
-
-    def _get_search_matches(self, term):
-        cache_key = (
-            self.buffer.revision,
-            term,
-            self.search_options.ignore_case,
-            self.search_options.regex,
-        )
-
-        if self.doc.search_cache is not None:
-            key, matches = self.doc.search_cache
-            if key == cache_key:
-                return matches
-
-        matches = find_all(self.buffer, term, self.search_options)
-        self.doc.search_cache = (cache_key, matches)
-        return matches
-
-    def _find_text(self, term):
-        if (self.last_match and
-                self.last_match[:2] == (self.cursor.x, self.cursor.y)):
-            sx = self.cursor.x + max(1, self.last_match[2])
-            sy = self.cursor.y
-        else:
-            sx, sy = self.cursor.x, self.cursor.y
-        matches = self._get_search_matches(term)
-        hit = find_next(self.buffer, term, self.search_options, sx, sy)
-        if hit:
-            x, y, length = hit
-            self.cursor.set_pos(x, y, self.buffer.get_line_length,
-                                self.buffer.max_y)
-            self.last_match = hit
-            self.message = f"Found: {term}{self.search_options.flag_label()}"
-        else:
-            self.message = f"Not found: {term}"
-            self.last_match = None
-
-    def _start_replace(self):
-        self._prompt_base = "Replace"
-        self.mode = Mode.REPLACE_SEARCH
-        self.prompt.start(self._search_label("Replace"), self.last_search)
-
-    def _handle_replace_search(self, key):
-        if self._maybe_toggle(key):
-            return
-        result = self.prompt.handle_key(key)
-        if result == 'confirmed':
-            term = self.prompt.text
-            if not term:
-                self._exit_prompt_mode()
-                return
-            self.last_search = term
-            self.replace_term = term
-            self._prompt_base = "With"
-            self.mode = Mode.REPLACE_WITH
-            self.prompt.start("With: ")
-        elif result == 'cancelled':
-            self._exit_prompt_mode()
-
-    def _handle_replace_with(self, key):
-        result = self.prompt.handle_key(key)
-        if result == 'confirmed':
-            self.replace_with = self.prompt.text
-            self.prompt.deactivate()
-            self.replace_count = 0
-            hit = find_next(self.buffer, self.replace_term,
-                            self.search_options, self.cursor.x, self.cursor.y)
-            if hit is None:
-                self.message = f"Not found: {self.replace_term}"
-                self.last_match = None
-                self.mode = Mode.NORMAL
-            else:
-                self.last_match = hit
-                self.cursor.set_pos(hit[0], hit[1],
-                                    self.buffer.get_line_length,
-                                    self.buffer.max_y)
-                self.mode = Mode.REPLACE_CONFIRM
-        elif result == 'cancelled':
-            self._exit_prompt_mode()
-
-    def _handle_replace_confirm(self, key):
-        if key in (ord('y'), ord('Y')):
-            self._replace_current()
-            self._advance_replace(replaced=True)
-        elif key in (ord('n'), ord('N')):
-            self._advance_replace(replaced=False)
-        elif key in (ord('a'), ord('A')):
-            while self.last_match is not None:
-                self._replace_current()
-                self._advance_replace(replaced=True)
-        elif key in (ord('c'), ord('C'), Key.CTRL_G, Key.ESCAPE):
-            self._finish_replace(cancelled=True)
-
-    def _replace_current(self):
-        mx, my, ml = self.last_match
-        self._snapshot()
-        self.buffer.lines[my] = replace_in_line(
-            self.buffer.lines[my], mx, mx + ml, self.replace_with)
-        self.buffer.touch()
-        self.replace_count += 1
-        self.cursor.set_pos(mx + len(self.replace_with), my,
-                            self.buffer.get_line_length, self.buffer.max_y)
-
-    def _advance_replace(self, replaced):
-        mx, my, ml = self.last_match
-        if replaced:
-            nx = mx + len(self.replace_with)
-            if ml == 0 and not self.replace_with:
-                nx = mx + 1
-        else:
-            nx = mx + ml if ml else mx + 1
-        hit = find_next(self.buffer, self.replace_term, self.search_options,
-                        nx, my, wrap=False)
-        if hit is None:
-            self._finish_replace()
-        else:
-            self.last_match = hit
-            self.cursor.set_pos(hit[0], hit[1],
-                                self.buffer.get_line_length,
-                                self.buffer.max_y)
-
-    def _finish_replace(self, cancelled=False):
-        self.last_match = None
-        self.mode = Mode.NORMAL
-        if cancelled:
-            self.message = (f"Replace cancelled "
-                            f"({self.replace_count} replaced).")
-        else:
-            self.message = f"Replaced {self.replace_count} occurrence(s)."
-
-    def _handle_goto_line(self, key):
-        result = self.prompt.handle_key(key)
-        if result == 'confirmed':
-            raw = self.prompt.text.strip()
-            try:
-                target = int(raw)
-                target_y = max(0, min(target - 1, self.buffer.max_y))
-                self.cursor.set_pos(0, target_y,
-                                    self.buffer.get_line_length,
-                                    self.buffer.max_y)
-                self.message = f"Line {target_y + 1}/{self.buffer.max_y + 1}"
-            except ValueError:
-                self.message = "Invalid line number."
-            self._exit_prompt_mode()
-        elif result == 'cancelled':
-            self._exit_prompt_mode()
-
-    # ── NORMAL mode ───────────────────────────────────────────
-
-    def _handle_normal(self, key, screen_rows, screen_cols):
-        self.message = ""
-        buf = self.buffer
-        cur = self.cursor
-        max_x = buf.get_line_length
-        max_y = buf.max_y
-
-        if key == Key.CTRL_X:
-            if any(d.buffer.modified for d in self.documents):
-                self.mode = Mode.EXIT_CONFIRM
-                self.message = "Save modified buffers?"
-            else:
-                self.running = False
-            return
-        if key == Key.CTRL_S:
-            self._save_target = self.doc
-            if buf.filename:
-                if buf.save():
-                    self.message = "File saved."
+def main():
+    cfg = Config()
+    cli_files = sys.argv[1:] if len(sys.argv) > 1 else []
+    
+    # Pre-curses Swap Recovery Prompt (v0.0.4a01)
+    if cli_files:
+        for filepath in cli_files:
+            swap_data = read_swap(filepath)
+            if swap_data:
+                print(f"\n[Femto] Swap file found for {filepath}.")
+                choice = input("Recover unsaved changes? (y/n): ").strip().lower()
+                if choice != 'y':
+                    delete_swap(filepath)
                 else:
-                    self.message = "Error: could not save file."
-            else:
-                self.mode = Mode.SAVE_AS
-                self._reset_save_completion()
-                self.prompt.start("Save As: ")
-            return
-        if key == Key.CTRL_F:
-            self._switch_buffer(1); return
-        if key == Key.CTRL_L:
-            self._switch_buffer(-1); return
-        if key == Key.CTRL_W:
-            self._prompt_base = "Search"
-            self.mode = Mode.SEARCH
-            self.prompt.start(self._search_label("Search"), self.last_search)
-            return
-        if key == Key.CTRL_BACKSLASH:
-            self._start_replace()
-            return
-        if key == Key.CTRL_T:
-            self.mode = Mode.GOTO_LINE
-            self.prompt.start("Go To Line: ")
-            return
+                    print("Recovering... (swap data will be loaded into buffer)")
+                    # Note: A full implementation would inject swap_data into the Document here.
+                    
+    # Session Restore
+    if not cli_files and cfg.restore_session:
+        session = load_session()
+        if session and session.get('buffers'):
+            cli_files = [b['filename'] for b in session['buffers'] if b['filename'] and os.path.exists(b['filename'])]
 
-        # Clipboard
-        if key == Key.CTRL_B:
-            if self.selection.toggle(cur.x, cur.y):
-                self.message = "Mark set."
-            else:
-                self.message = "Mark off."
-            return
-        if key == Key.CTRL_K:
-            self._cut(); return
-        if key == Key.CTRL_P:
-            self._copy(); return
-        if key == Key.CTRL_U:
-            self._paste(); return
+    def run(stdscr):
+        app = Application(stdscr, initial_files=cli_files)
+        
+        # Inject swap data if user chose to recover
+        for doc in app.documents:
+            if doc.buffer.filename:
+                swap_data = read_swap(doc.buffer.filename)
+                if swap_data:
+                    doc.buffer.lines = swap_data['lines']
+                    doc.cursor.set_pos(swap_data['x'], swap_data['y'], doc.buffer.get_line_length, doc.buffer.max_y)
+                    doc.buffer.touch()
+                    delete_swap(doc.buffer.filename) # Clean up after recovery
+                    
+        app.main_loop()
 
-        # Toggles
-        if key == Key.CTRL_N:
-            self.config.show_line_numbers = not self.config.show_line_numbers
-            self.message = ("Line numbers " +
-                            ("on" if self.config.show_line_numbers else "off"))
-            return
-        if key == Key.CTRL_D:
-            self.config.mouse = not self.config.mouse
-            self._set_mouse(self.config.mouse)
-            self.message = ("Mouse " +
-                            ("on" if self.config.mouse else "off"))
-            return
+    try:
+        curses.wrapper(run)
+    except KeyboardInterrupt:
+        pass
 
-        # Undo / Redo
-        if key == Key.CTRL_Z:
-            self._do_undo(); return
-        if key == Key.CTRL_Y:
-            self._do_redo(); return
-
-        # Line operations (v0.0.4)
-        if key in (Key.ALT_D, alt(ord('D'))):
-            self._duplicate(); return
-        if key in (Key.ALT_T, alt(ord('T'))):
-            self._transpose(); return
-        if key == Key.ALT_S:
-            self._sort_lines(case_sensitive=True); return
-        if key == Key.ALT_SHIFT_S:
-            self._sort_lines(case_sensitive=False); return
-        if key in (Key.ALT_U, alt(ord('U'))):
-            self._transform_case(upper=True); return
-        if key in (Key.ALT_L, alt(ord('L'))):
-            self._transform_case(upper=False); return
-
-        # Navigation
-        if key == Key.CTRL_LEFT:
-            cur.x = buf.get_prev_word_pos(cur.y, cur.x)
-        elif key == Key.CTRL_RIGHT:
-            cur.x = buf.get_next_word_pos(cur.y, cur.x)
-        elif key == Key.PAGE_UP:
-            self._page(-1, screen_rows, screen_cols)
-        elif key == Key.PAGE_DOWN:
-            self._page(1, screen_rows, screen_cols)
-        elif key == Key.HOME or key == Key.CTRL_A:
-            cur.home()
-        elif key == Key.END or key == Key.CTRL_E:
-            cur.end(max_x(cur.y))
-        elif key == Key.ARROW_UP:
-            cur.move(0, -1, max_x, max_y)
-        elif key == Key.ARROW_DOWN:
-            cur.move(0, 1, max_x, max_y)
-        elif key == Key.ARROW_LEFT:
-            if cur.x > 0:
-                cur.x -= 1
-            elif cur.y > 0:
-                cur.y -= 1
-                cur.x = max_x(cur.y)
-        elif key == Key.ARROW_RIGHT:
-            if cur.x < max_x(cur.y):
-                cur.x += 1
-            elif cur.y < max_y:
-                cur.y += 1
-                cur.x = 0
-
-        # Editing
-        elif key == Key.TAB:
-            self._pre_edit()
-            cur.x = buf.insert_tab(cur.y, cur.x)
-        elif key == Key.SHIFT_TAB:
-            self._pre_edit()
-            cur.x = buf.remove_tab(cur.y, cur.x)
-        elif is_backspace(key):
-            self._pre_edit()
-            cur.x, cur.y = buf.backspace(cur.x, cur.y)
-        elif key == Key.DELETE:
-            self._pre_edit()
-            buf.delete_char(cur.x, cur.y)
-        elif is_enter(key):
-            self._pre_edit()
-            buf.insert_newline(cur.x, cur.y)
-            cur.y += 1
-
-            # Auto-indent logic
-            if self.config.auto_indent:
-                indent = buf.get_leading_whitespace(cur.y - 1)
-
-                # Python-specific: add extra indent if previous line ends with ':'
-                # We split on '#' to ignore inline comments (e.g., `def foo(): #hi`)
-                if buf.filename and buf.filename.endswith(".py"):
-                    prev_line_code = buf.lines[cur.y - 1].split('#')[0].rstrip()
-                    if prev_line_code.endswith(':'):
-                        indent += " " * self.config.tab_size
-
-                buf.lines[cur.y] = indent + buf.lines[cur.y]
-                buf.touch()
-                cur.x = len(indent)
-            else:
-                cur.x = 0
-        elif 32 <= key <= 126:
-            self._pre_edit()
-            buf.insert_char(cur.x, cur.y, chr(key))
-            cur.x += 1
-
-    def _page(self, direction, screen_rows, screen_cols):
-        text_cols = max(1, screen_cols - self._gutter_width())
-        if self.config.soft_wrap:
-            _, vy = get_visual_position(
-                self.cursor.x, self.cursor.y, self.buffer.lines,
-                text_cols, True)
-            target = max(0, vy + direction * screen_rows)
-            y = get_logical_from_visual(target, self.buffer.lines,
-                                        text_cols, True)
-        else:
-            y = self.cursor.y + direction * screen_rows
-        self.cursor.set_pos(self.cursor.x, y,
-                            self.buffer.get_line_length, self.buffer.max_y)
-
-    # ── Undo / Redo ───────────────────────────────────────────
-
-    def _do_undo(self):
-        result = self.history.undo(self.buffer.lines,
-                                   self.cursor.x, self.cursor.y)
-        if result:
-            lines, x, y = result
-            self.buffer.lines = lines
-            self.buffer.touch()
-            self.last_match = None
-            self.cursor.set_pos(x, y, self.buffer.get_line_length,
-                                self.buffer.max_y)
-            self.message = "Undo."
-        else:
-            self.message = "Nothing to undo."
-
-    def _do_redo(self):
-        result = self.history.redo(self.buffer.lines,
-                                   self.cursor.x, self.cursor.y)
-        if result:
-            lines, x, y = result
-            self.buffer.lines = lines
-            self.buffer.touch()
-            self.last_match = None
-            self.cursor.set_pos(x, y, self.buffer.get_line_length,
-                                self.buffer.max_y)
-            self.message = "Redo."
-        else:
-            self.message = "Nothing to redo."
-
-    def _exit_prompt_mode(self):
-        self.prompt.deactivate()
-        self.mode = Mode.NORMAL
-        self.pending_exit = False
-
-    # ── input reading ─────────────────────────────────────────
-
-    def _read_key(self, stdscr):
-        # curses can otherwise wait a full second before returning bare Esc.
-        # Keep the shorter sequence timeout local to HELP and preserve the
-        # terminal's configured delay for editing and prompts (Python 3.9+).
-        get_delay = getattr(curses, "get_escdelay", None)
-        set_delay = getattr(curses, "set_escdelay", None)
-        previous_delay = None
-        if self.mode == Mode.HELP and get_delay and set_delay:
-            previous_delay = get_delay()
-            set_delay(min(previous_delay, HELP_ESCAPE_DELAY_MS))
-        try:
-            key = stdscr.getch()
-        finally:
-            if previous_delay is not None:
-                set_delay(previous_delay)
-
-        if key in CONHOST_ALT_MAP:
-            return alt(CONHOST_ALT_MAP[key])
-
-        if key > 255:
-            mapped = self._keyname_alt(key)
-            if mapped is not None:
-                return mapped
-
-        if key == 27:
-            if self.mode == Mode.HELP:
-                stdscr.timeout(HELP_ESCAPE_DELAY_MS)
-            else:
-                curses.halfdelay(2)
-            try:
-                nxt = stdscr.getch()
-            finally:
-                if self.mode == Mode.HELP:
-                    stdscr.timeout(-1)
-                else:
-                    curses.cbreak()
-            if nxt == -1:
-                return 27
-            if nxt == ord('['):
-                return self._read_csi(stdscr)
-            return alt(nxt) if 0 <= nxt <= 255 else 27
-
-        if 128 <= key <= 255:
-            base = key - 128
-            if chr(base) in ALT_BASES:
-                return alt(base)
-            return key
-
-        return key
-
-    def _keyname_alt(self, key):
-        try:
-            name = curses.keyname(key)
-        except Exception:
-            return None
-        if name and name.startswith(b"ALT_") and len(name) == 5:
-            return alt(name[4])
-        return None
-
-    def _read_csi(self, stdscr):
-        seq = []
-        stdscr.nodelay(True)
-        try:
-            while True:
-                ch = stdscr.getch()
-                if ch == -1:
-                    break
-                seq.append(ch)
-                if 0x40 <= ch <= 0x7E:
-                    break
-        finally:
-            stdscr.nodelay(False)
-        code = "".join(chr(c) for c in seq)
-
-        if code == "Z":
-            return Key.SHIFT_TAB
-        if code.endswith("D") and (";5" in code or code == "5D"):
-            return Key.CTRL_LEFT
-        if code.endswith("C") and (";5" in code or code == "5C"):
-            return Key.CTRL_RIGHT
-        return -1
-
-    # ── Main loop ─────────────────────────────────────────────
-
-    def main_loop(self, stdscr):
-        _ignore_suspend()
-        self.renderer = Renderer(stdscr, self.config)
-        self._set_mouse(self.config.mouse)
-
-        while self.running:
-            screen_rows, screen_cols = self.renderer.get_dimensions()
-            sel = None
-            if self.mode == Mode.HELP:
-                view = HelpView(self.help_scroll_y)
-                view.move(None, screen_rows, screen_cols)
-                self.help_scroll_y = view.offset
-            else:
-                text_cols = max(1, screen_cols - self._gutter_width())
-
-                vx, vy = get_visual_position(
-                    self.cursor.x, self.cursor.y, self.buffer.lines,
-                    text_cols, self.config.soft_wrap)
-                self.cursor.update_scroll(
-                    vy, vx, screen_rows, text_cols,
-                    self.config.smooth_scroll_margin, self.config.soft_wrap)
-
-                if self.selection.active:
-                    bounds = self._current_bounds()
-                    if not self.selection.is_empty(bounds):
-                        sel = bounds
-
-            self.renderer.render(
-                self.buffer, self.cursor, message=self.message,
-                prompt=self.prompt, mode=self.mode,
-                selection=sel, mark_set=self.selection.active,
-                match=self.last_match,
-                all_matches=getattr(self, "all_matches", None),
-                keybindings=KEYBINDINGS if self.mode == Mode.HELP else None,
-                doc_index=self.current, 
-                doc_count=len(self.documents),
-                help_scroll_y=getattr(self, "help_scroll_y", 0),
-            )
-
-            try:
-                key = self._read_key(stdscr)
-            except KeyboardInterrupt:
-                if self.mode == Mode.HELP:
-                    continue
-                self.running = False
-                break
-
-            if key == Key.RESIZE:
-                if self.config.mouse:
-                    self._set_mouse(True)
-                continue
-            if key == curses.KEY_MOUSE:
-                self._handle_mouse(stdscr)
-                continue
-            if key < 0:
-                continue
-
-            self.handle_input(key, screen_rows, screen_cols)
-
-    def run(self):
-        try:
-            curses.wrapper(self.main_loop)
-        except Exception as e:
-            print(f"Femto crashed: {e}")
+if __name__ == "__main__":
+    main()

@@ -22,6 +22,8 @@ class Config:
         self.auto_indent = True
         self.wrap_at_word = True
         self.system_clipboard = False
+        self.autosave_seconds = 30
+        self.restore_session = True
         self.load()
 
     def load(self):
@@ -74,5 +76,9 @@ class Config:
                             self.wrap_at_word = val.lower() in ("true", "1", "yes")
                         elif key == "system_clipboard":
                             self.system_clipboard = val.lower() in ("true", "1", "yes")
+                        elif key == "autosave_seconds":
+                            self.autosave_seconds = int(val)
+                        elif key == "restore_session":
+                            self.restore_session = val.lower() in ("true", "1", "yes")
         except Exception:
             pass

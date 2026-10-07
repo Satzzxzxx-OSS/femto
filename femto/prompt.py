@@ -1,95 +1,73 @@
 """
-Interactive prompt system for Femto.
-Handles text input displayed in the bottom status bar area.
+Prompt line model for Femto (search, replace, save-as, goto).
 """
-
-import curses
 
 
 class Prompt:
-    """Manages a single-line text input prompt."""
-
     def __init__(self):
+        self.active = False
         self.label = ""
         self.text = ""
         self.cursor_pos = 0
-        self.active = False
+        self.help = ""
 
-    def start(self, label, default=""):
-        """Activate the prompt with a label and optional default text."""
-        self.label = label
-        self.text = default
-        self.cursor_pos = len(default)
+    def start(self, label, help_text=""):
         self.active = True
+        self.label = label
+        self.help = help_text
+        self.text = ""
+        self.cursor_pos = 0
 
-    def deactivate(self):
-        """Deactivate the prompt and clear state."""
+    def clear(self):
         self.active = False
         self.label = ""
         self.text = ""
         self.cursor_pos = 0
 
-    def handle_key(self, key):
-        """
-        Process a keypress while the prompt is active.
+    def insert(self, ch):
+        self.text = (self.text[:self.cursor_pos] + ch +
+                     self.text[self.cursor_pos:])
+        self.cursor_pos += len(ch)
 
-        Returns:
-            'confirmed'  – user pressed Enter
-            'cancelled'  – user pressed Ctrl+G or Escape
-            'active'     – prompt remains open
-        """
-        # Confirm
-        if key in (10, 13, curses.KEY_ENTER):
-            return 'confirmed'
+    def backspace(self):
+        if self.cursor_pos > 0:
+            self.text = (self.text[:self.cursor_pos - 1] +
+                         self.text[self.cursor_pos:])
+            self.cursor_pos -= 1
 
-        # Cancel
-        if key in (7, 27):  # Ctrl+G or Escape
-            return 'cancelled'
+    def delete(self):
+        if self.cursor_pos < len(self.text):
+            self.text = (self.text[:self.cursor_pos] +
+                         self.text[self.cursor_pos + 1:])
 
-        # Backspace
-        if key in (curses.KEY_BACKSPACE, 127, 8):
-            if self.cursor_pos > 0:
-                self.text = (
-                    self.text[: self.cursor_pos - 1]
-                    + self.text[self.cursor_pos :]
-                )
-                self.cursor_pos -= 1
+    def move(self, dx):
+        self.cursor_pos = max(0, min(len(self.text), self.cursor_pos + dx))
 
-        # Delete
-        elif key == curses.KEY_DC:
-            if self.cursor_pos < len(self.text):
-                self.text = (
-                    self.text[: self.cursor_pos]
-                    + self.text[self.cursor_pos + 1 :]
-                )
+    def home(self):
+        self.cursor_pos = 0
 
-        # Cursor movement within prompt
-        elif key == curses.KEY_LEFT:
-            self.cursor_pos = max(0, self.cursor_pos - 1)
-        elif key == curses.KEY_RIGHT:
-            self.cursor_pos = min(len(self.text), self.cursor_pos + 1)
-        elif key == curses.KEY_HOME:
-            self.cursor_pos = 0
-        elif key == curses.KEY_END:
-            self.cursor_pos = len(self.text)
-
-        # Printable ASCII
-        elif 32 <= key <= 126:
-            char = chr(key)
-            self.text = (
-                self.text[: self.cursor_pos]
-                + char
-                + self.text[self.cursor_pos :]
-            )
-            self.cursor_pos += 1
-
-        return 'active'
+    def end(self):
+        self.cursor_pos = len(self.text)
 
     def get_display(self, width):
-        """Return the prompt string formatted to fill *width* columns."""
-        display = f"{self.label}{self.text}"
-        return display.ljust(width)[:width]
+        return f" {self.label}: {self.text}"
 
     def get_cursor_x(self):
-        """Return the screen column of the prompt cursor."""
-        return len(self.label) + self.cursor_pos
+        return len(self.label) + 3 + self.cursor_pos
+
+    def handle_key(self, key):
+        """Legacy helper: 'enter' | 'cancel' | 'change' | None."""
+        if key in (10, 13, 343, 344):
+            return "enter"
+        if key in (27, 7):
+            return "cancel"
+        if key in (8, 127):
+            self.backspace()
+            return "change"
+        if isinstance(key, str) and len(key) == 1 and ord(key) > 31:
+            self.insert(key)
+            return "change"
+        if isinstance(key, int) and 32 <= key <= 126:
+            self.insert(chr(key))
+            return "change"
+        return None

@@ -313,29 +313,92 @@ class Application:
             return
 
     # ── prompts ──────────────────────────────────────────────
-    def _handle_prompt(self, key):
+    def _handle_prompt(self, key, screen_rows=24, screen_cols=80):
+        # Tab completion in Save-As
         if self.mode == Mode.SAVE_AS and key == Key.TAB:
             self._complete_path()
             return
-        if isinstance(key, int) and key in (15, 18):  # ^O case, ^R regex
-            if key == 15:
-                self.search_options.ignore_case = not self.search_options.ignore_case
-            else:
-                self.search_options.regex = not self.search_options.regex
-            self.message = self.search_options.flag_label() or "flags cleared"
-            return
-        result = self.prompt.handle_key(key)
-        if result == "enter":
+
+        # NORMALIZE: control keys may arrive as str ('\x0f') or int (15)
+        k = key
+        if isinstance(key, str) and len(key) == 1:
+            k = ord(key)
+
+        # Enter → commit
+        if is_enter(key) or k in (10, 13, 343, 344):
             self._commit_prompt()
-        elif result == "cancel":
+            return
+        # Cancel → ^G (7) or Esc (27)
+        if k in (7, 27):
             self._cancel_prompt()
-        elif result == "change" and self.mode == Mode.SEARCH:
+            return
+        # ^O (15) → toggle case-insensitive
+        if k == 15:
+            self.search_options.ignore_case = not self.search_options.ignore_case
+            self._refresh_prompt_flags()
+            return
+        # ^R (18) → toggle regex
+        if k == 18:
+            self.search_options.regex = not self.search_options.regex
+            self._refresh_prompt_flags()
+            return
+        # Backspace
+        if is_backspace(key) or k in (8, 127):
+            self.prompt.backspace()
+            self._prompt_changed()
+            return
+        # Delete
+        if isinstance(key, int) and key == curses.KEY_DC:
+            self.prompt.delete()
+            self._prompt_changed()
+            return
+        # Cursor movement inside the prompt
+        if isinstance(key, int):
+            if key == curses.KEY_LEFT:
+                self.prompt.move(-1)
+                return
+            if key == curses.KEY_RIGHT:
+                self.prompt.move(1)
+                return
+            if key == curses.KEY_HOME:
+                self.prompt.home()
+                return
+            if key == curses.KEY_END:
+                self.prompt.end()
+                return
+        # Printable characters (str from get_wch, int from getch)
+        ch = None
+        if isinstance(key, str) and len(key) == 1 and ord(key) > 31:
+            ch = key
+        elif isinstance(key, int) and 32 <= key <= 126:
+            ch = chr(key)
+        if ch is not None:
+            self.prompt.insert(ch)
+            self._prompt_changed()
+            return
+
+    def _refresh_prompt_flags(self):
+        base = self.prompt.label.split(" [")[0]
+        self.prompt.label = base + self.search_options.flag_label()
+        self.message = ("case=" +
+                        ("insensitive" if self.search_options.ignore_case
+                         else "sensitive") +
+                        ", regex=" +
+                        ("on" if self.search_options.regex else "off"))
+
+    def _prompt_changed(self):
+        if self.mode == Mode.SEARCH:
             self._live_search_update()
 
     def _search(self):
         self.mode = Mode.SEARCH
         self.pre_search_cursor = (self.cursor.x, self.cursor.y)
-        self.prompt.start("Search", self.search_options.flag_label())
+        self._last_search = getattr(self, "_last_search", "")
+        self.prompt.start("Search" + self.search_options.flag_label(), "")
+        self.prompt.text = self._last_search
+        self.prompt.cursor_pos = len(self.prompt.text)
+        if self.prompt.text:
+            self._live_search_update()
 
     def _live_search_update(self):
         term = self.prompt.text
@@ -352,12 +415,13 @@ class Application:
         for mx, my, ml in self.all_matches:
             if (my, mx) >= (self.pre_search_cursor[1], self.pre_search_cursor[0]):
                 self.last_match = (mx, my, ml)
-                self.cursor.set_pos(mx, my, self.buffer.get_line_length, self.buffer.max_y)
+                self.cursor.set_pos(mx, my, self.buffer.get_line_length,
+                                    self.buffer.max_y)
                 break
 
     def _replace(self):
         self.mode = Mode.REPLACE_SEARCH
-        self.prompt.start("Replace", "")
+        self.prompt.start("Replace" + self.search_options.flag_label(), "")
 
     def _goto_line(self):
         self.mode = Mode.GOTO_LINE
@@ -394,13 +458,18 @@ class Application:
     def _commit_prompt(self):
         text = self.prompt.text
         if self.mode == Mode.SEARCH:
+            if text:
+                self._last_search = text
             hit = find_next(self.buffer, text, self.search_options,
                             self.cursor.x, self.cursor.y)
             if hit:
                 self.last_match = hit
-                self.cursor.set_pos(hit[0], hit[1], self.buffer.get_line_length, self.buffer.max_y)
+                self.cursor.set_pos(hit[0], hit[1],
+                                    self.buffer.get_line_length,
+                                    self.buffer.max_y)
                 try:
-                    self.all_matches = find_all(self.buffer, text, self.search_options)
+                    self.all_matches = find_all(self.buffer, text,
+                                                self.search_options)
                 except Exception:
                     self.all_matches = []
             else:
@@ -427,7 +496,8 @@ class Application:
             try:
                 line = int(text) - 1
                 self.cursor.set_pos(0, max(0, min(line, self.buffer.max_y)),
-                                    self.buffer.get_line_length, self.buffer.max_y)
+                                    self.buffer.get_line_length,
+                                    self.buffer.max_y)
             except ValueError:
                 self.message = "Invalid line number"
         self.mode = Mode.NORMAL
@@ -435,8 +505,10 @@ class Application:
 
     def _cancel_prompt(self):
         if self.mode == Mode.SEARCH:
-            self.cursor.set_pos(self.pre_search_cursor[0], self.pre_search_cursor[1],
-                                self.buffer.get_line_length, self.buffer.max_y)
+            self.cursor.set_pos(self.pre_search_cursor[0],
+                                self.pre_search_cursor[1],
+                                self.buffer.get_line_length,
+                                self.buffer.max_y)
             self.all_matches, self.last_match = [], None
         self.mode = Mode.NORMAL
         self.prompt.clear()
